@@ -1,0 +1,169 @@
+#!/usr/bin/env ruby
+# tap-audit
+
+# 20260816
+# 0.0.0
+
+require 'switches.rb'
+
+DEFAULT_REPOSITORIES_DIRECTORY = File.expand_path('..')
+DEFAULT_TAP_DIRECTORY = File.expand_path('.')
+UNINSTALLED_DIRECTORIES = %w{doc spec test}
+
+def usage
+  puts "tap-audit - Report what each formula in the tap has drifted from."
+  puts
+  puts "Usage: tap-audit [options]"
+  puts
+  puts "Options:"
+  puts "  -r, --repositories DIR  Where the source repositories are (default: #{DEFAULT_REPOSITORIES_DIRECTORY})"
+  puts "  -f, --formulae DIR      Where the formulae are (default: #{DEFAULT_TAP_DIRECTORY})"
+  puts "  -h, --help              Show this help"
+  puts
+  puts "Exits 1 where anything was found, so it can gate a release."
+end
+
+def switches
+  @switches ||= Switches.new do |s|
+    s.optional(:r, :repositories, default: DEFAULT_REPOSITORIES_DIRECTORY){'Where the source repositories are'}
+    s.optional(:f, :formulae, default: DEFAULT_TAP_DIRECTORY){'Where the formulae are'}
+    s.perform(:h, :help?) do
+      usage
+      exit
+    end
+  end
+end
+
+def validate_directories
+  [switches.repositories, switches.formulae].each do |directory|
+    unless Dir.exist?(directory)
+      $stderr.puts "No such directory: #{directory}"
+      exit 1
+    end
+  end
+end
+
+def formula_paths
+  @formula_paths ||= Dir[File.join(switches.formulae, '*.rb')].sort
+end
+
+def formula_name(path)
+  File.basename(path, '.rb')
+end
+
+def formula_source(path)
+  @formula_sources ||= {}
+  @formula_sources[path] ||= File.read(path)
+end
+
+def declared_version(path)
+  formula_source(path)[/^\s*version '([^']+)'/, 1]
+end
+
+def declared_tag(path)
+  formula_source(path)[/^\s*url .*tag: '([^']+)'/, 1]
+end
+
+# Commented-out install lines are not install lines, and skyhooks carries four
+# of them.  A line is read only where what precedes the .install is code.
+def install_lines(path)
+  formula_source(path).lines.reject{|line| line.strip.start_with?('#')}.select{|line| line =~ /\.install\b/}
+end
+
+def installed_paths(path)
+  install_lines(path).flat_map{|line| line.scan(/'([^']+)'/)}.flatten
+end
+
+def repository_path(name)
+  File.join(switches.repositories, name)
+end
+
+def repository?(name)
+  Dir.exist?(File.join(repository_path(name), '.git'))
+end
+
+def git(name, *arguments)
+  IO.popen(['git', '-C', repository_path(name), *arguments], err: File::NULL, &:read)
+end
+
+def tags(name)
+  git(name, 'tag', '--list').lines.map(&:strip)
+end
+
+# The top-level directory of every tracked file, which is what an install line
+# names.  A file tracked at the root belongs to no directory and is left out.
+def repository_directories(name)
+  git(name, 'ls-files').lines.map{|path| path.strip.split('/').first if path.include?('/')}.compact.uniq.sort
+end
+
+def changelog_path(name)
+  Dir[File.join(repository_path(name), 'CHANGELOG*')].first
+end
+
+# The newest entry, the CHANGELOGs being written newest-first and the version
+# test in each repository asserting that the two agree.
+def repository_version(name)
+  return nil unless changelog_path(name)
+  File.read(changelog_path(name))[/^(\d+\.\d+\.\d+):/, 1]
+end
+
+def version_finding(name, path)
+  return nil unless repository_version(name)
+  return nil if repository_version(name) == declared_version(path)
+  "version: the formula says #{declared_version(path)} and the CHANGELOG says #{repository_version(name)}"
+end
+
+# A url naming no tag builds the default branch, so the declared version is a
+# label rather than a pin and says nothing about what was installed.
+def pin_finding(name, path)
+  return 'url names no tag, so the build takes the default branch whatever the version says' unless declared_tag(path)
+  return "url names #{declared_tag(path)}, which is not a tag in the repository" unless tags(name).include?(declared_tag(path))
+  nil
+end
+
+def installed?(directory, path)
+  installed_paths(path).any?{|installed| installed == directory || installed.start_with?("#{directory}/")}
+end
+
+# The git-boot case: a directory added to the repository is absent from the
+# bottle until an install line names it, and nothing but a Homebrew install
+# shows that it is missing.
+def directory_findings(name, path)
+  (repository_directories(name) - UNINSTALLED_DIRECTORIES).reject{|directory| installed?(directory, path)}.collect do |directory|
+    "#{directory}/ is in the repository and named by no install line"
+  end
+end
+
+def findings_for(name, path)
+  return ["no repository at #{repository_path(name)}"] unless repository?(name)
+  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path)].compact
+end
+
+def findings
+  @findings ||= formula_paths.each_with_object({}) do |path, result|
+    found = findings_for(formula_name(path), path)
+    result[formula_name(path)] = found unless found.empty?
+  end
+end
+
+def report
+  findings.each do |name, list|
+    puts name
+    list.each{|finding| puts "  #{finding}"}
+  end
+end
+
+def report_summary
+  puts unless findings.empty?
+  puts "#{findings.length} of #{formula_paths.length} formulae have something to answer for."
+end
+
+def main
+  switches
+  validate_directories
+  report
+  report_summary
+  exit 1 unless findings.empty?
+end
+
+main

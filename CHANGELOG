@@ -1,0 +1,33 @@
+# CHANGELOG
+
+## 20260816
+
+0.0.0: A first cut reading the formula against the repository: the version, the pin, and the tracked directories against what def install names.
+
+1. ~ bin/tap-audit: + require 'switches.rb'
+2. ~ bin/tap-audit: + usage()
+3. ~ bin/tap-audit: + switches()
+4. ~ bin/tap-audit: + validate_directories()
+5. ~ bin/tap-audit: + formula_paths()
+6. ~ bin/tap-audit: + formula_name()
+7. ~ bin/tap-audit: + formula_source()
+8. ~ bin/tap-audit: + declared_version()
+9. ~ bin/tap-audit: + declared_tag()
+10. ~ bin/tap-audit: + install_lines()
+11. ~ bin/tap-audit: + installed_paths()
+12. ~ bin/tap-audit: + repository_path()
+13. ~ bin/tap-audit: + repository?()
+14. ~ bin/tap-audit: + git()
+15. ~ bin/tap-audit: + tags()
+16. ~ bin/tap-audit: + repository_directories()
+17. ~ bin/tap-audit: + changelog_path()
+18. ~ bin/tap-audit: + repository_version()
+19. ~ bin/tap-audit: + version_finding()
+20. ~ bin/tap-audit: + pin_finding()
+21. ~ bin/tap-audit: + installed?()
+22. ~ bin/tap-audit: + directory_findings()
+23. ~ bin/tap-audit: + findings_for()
+24. ~ bin/tap-audit: + findings()
+25. ~ bin/tap-audit: + report()
+26. ~ bin/tap-audit: + report_summary()
+27. ~ bin/tap-audit: + main()
