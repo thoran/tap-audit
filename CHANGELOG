@@ -2,6 +2,14 @@
 
 ## 20260816
 
+0.0.1: Read an install line's paths under either quoting, and through an interpolation.
+
+1. ~ bin/tap-audit: + quoted_strings()
+2. ~ bin/tap-audit: + repository_relative()
+3. ~ bin/tap-audit: ~ install_lines()
+4. ~ bin/tap-audit: ~ installed_paths()
+
+
 0.0.0: A first cut reading the formula against the repository: the version, the pin, and the tracked directories against what def install names.
 
 1. ~ bin/tap-audit: + require 'switches.rb'

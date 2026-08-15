@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20260816
-# 0.0.0
+# 0.0.1
 
 require 'switches.rb'
 
@@ -64,14 +64,30 @@ def declared_tag(path)
   formula_source(path)[/^\s*url .*tag: '([^']+)'/, 1]
 end
 
-# Commented-out install lines are not install lines, and skyhooks carries four
-# of them.  A line is read only where what precedes the .install is code.
+# A formula reaches the keg by more than .install: moby copied its lib in with
+# FileUtils.cp_r, which 0.0.0 did not read and so reported a lib named by no
+# install line where the lib was in fact installed, wrongly and by another
+# means.  Anything which puts a path into the keg is an install line here.
+# Commented-out lines are not, and skyhooks carries four of them.
 def install_lines(path)
-  formula_source(path).lines.reject{|line| line.strip.start_with?('#')}.select{|line| line =~ /\.install\b/}
+  formula_source(path).lines.reject{|line| line.strip.start_with?('#')}.select{|line| line =~ /\.install\b|\bcp_r?\b|\bmv\b|\bln_s\b/}
+end
+
+# Both quotings, since an interpolated path cannot be single-quoted and
+# FileUtils.cp_r("#{pwd}/lib", lib) is how the one which was missed was written.
+def quoted_strings(line)
+  line.scan(/'([^']*)'|"([^"]*)"/).flatten.compact
+end
+
+# What is left of a string once the interpolations are dropped, being the part
+# which names a path within the repository.  "#{pwd}/lib" is lib, and a leading
+# separator left behind by the interpolation is not a path from the root.
+def repository_relative(string)
+  string.gsub(/\#\{[^}]*\}/, '').sub(%r{\A/+}, '').sub(%r{/+\z}, '')
 end
 
 def installed_paths(path)
-  install_lines(path).flat_map{|line| line.scan(/'([^']+)'/)}.flatten
+  install_lines(path).flat_map{|line| quoted_strings(line)}.collect{|s| repository_relative(s)}.reject(&:empty?)
 end
 
 def repository_path(name)
