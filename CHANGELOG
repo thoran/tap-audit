@@ -2,6 +2,18 @@
 
 ## 20260816
 
+0.1.0: Report the same gem pinned at more than one version, apart from the formulae, that being a fault of the tap rather than of either.
+
+1. ~ bin/tap-audit: + resources()
+2. ~ bin/tap-audit: + resource_versions()
+3. ~ bin/tap-audit: + resource_finding()
+4. ~ bin/tap-audit: + resource_findings()
+5. ~ bin/tap-audit: + report_resources()
+6. ~ bin/tap-audit: + anything_found?()
+7. ~ bin/tap-audit: ~ report_summary()
+8. ~ bin/tap-audit: ~ main()
+
+
 0.0.1: Read an install line's paths under either quoting, and through an interpolation.
 
 1. ~ bin/tap-audit: + quoted_strings()

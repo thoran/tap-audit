@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20260816
-# 0.0.1
+# 0.1.0
 
 require 'switches.rb'
 
@@ -150,6 +150,50 @@ def directory_findings(name, path)
   end
 end
 
+# Each resource is a gem name and the version its url names, the two being
+# stated separately and so able to disagree.  A commented-out resource is not
+# one, as with the install lines above.
+def resources(path)
+  @resources ||= {}
+  @resources[path] ||= (
+    result = {}
+    gem_name = nil
+    formula_source(path).lines.reject{|line| line.strip.start_with?('#')}.each do |line|
+      if (declaration = line.match(/^\s*resource '([^']+)' do/))
+        gem_name = declaration[1]
+      elsif gem_name && (url = line.match(%r{url '.*/#{Regexp.escape(gem_name)}-([0-9][^']*)\.gem'}))
+        result[gem_name] = url[1]
+        gem_name = nil
+      end
+    end
+    result
+  )
+end
+
+# Which formulae vendor which version of what, across the whole tap.  Each
+# formula declares its own resources, so the same gem is pinned once per
+# formula and nothing holds the copies to the same version.
+def resource_versions
+  @resource_versions ||= formula_paths.each_with_object({}) do |path, result|
+    resources(path).each do |gem_name, version|
+      ((result[gem_name] ||= {})[version] ||= []) << formula_name(path)
+    end
+  end
+end
+
+def resource_finding(gem_name, versions)
+  "#{gem_name}: " + versions.sort.collect{|version, names| "#{version} in #{names.sort.join(', ')}"}.join('; ')
+end
+
+# switches.rb was 0.9.15 in two formulae and 0.10.3 in two others, and 0.9.15 is
+# the version which requires ostruct without declaring it.  Nothing says which
+# is meant, so the drift is invisible until one of them fails.
+def resource_findings
+  @resource_findings ||= resource_versions.select{|_gem_name, versions| versions.length > 1}.collect do |gem_name, versions|
+    resource_finding(gem_name, versions)
+  end
+end
+
 def findings_for(name, path)
   return ["no repository at #{repository_path(name)}"] unless repository?(name)
   [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path)].compact
@@ -169,17 +213,33 @@ def report
   end
 end
 
+# Reported apart from the rest, a gem pinned twice being a fault of the tap
+# rather than of any one formula in it: naming either formula would be naming
+# the wrong half of the disagreement.
+def report_resources
+  return if resource_findings.empty?
+  puts
+  puts 'the same gem at more than one version'
+  resource_findings.each{|finding| puts "  #{finding}"}
+end
+
 def report_summary
-  puts unless findings.empty?
-  puts "#{findings.length} of #{formula_paths.length} formulae have something to answer for."
+  puts unless findings.empty? && resource_findings.empty?
+  puts "#{findings.length} of #{formula_paths.length} formulae have something to answer for, " \
+    "and #{resource_findings.length} #{resource_findings.length == 1 ? 'gem is' : 'gems are'} pinned at more than one version."
+end
+
+def anything_found?
+  !findings.empty? || !resource_findings.empty?
 end
 
 def main
   switches
   validate_directories
   report
+  report_resources
   report_summary
-  exit 1 unless findings.empty?
+  exit 1 if anything_found?
 end
 
 main
