@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20260817
-# 0.3.0
+# 0.4.0
 
 require 'switches.rb'
 
@@ -269,6 +269,59 @@ def commits?(name)
   !git(name, 'rev-parse', '--verify', 'HEAD').strip.empty?
 end
 
+def dependencies(path)
+  formula_source(path).lines.reject{|line| line.strip.start_with?('#')}.collect{|line| line[/^\s*depends_on '([^']+)'/, 1]}.compact
+end
+
+# Resources are fetched and installed by def install or they are not installed
+# at all; declaring one asks Homebrew for nothing by itself.  moby declares
+# switches.rb and mechanize and installs neither, so it resolves both from
+# whichever gem home the invoking ruby happens to have — which is why its
+# wrapper cannot set GEM_HOME without breaking it.
+def unstaged_resource_finding(path)
+  return nil if resources(path).empty?
+  return nil if logical_lines(install_body(path)).any?{|statement| statement =~ /\bresources?\b/}
+  "#{resources(path).length} resources declared and installed by nothing in def install, so they are resolved from whichever gem home the invoking ruby has"
+end
+
+# The interpreter the installed script actually names.  Not every formula wants
+# depends_on 'ruby': gem-publish is a shell script and correctly declares
+# nothing, so the question is whether what is declared matches what is asked for
+# rather than whether anything is declared at all.
+#
+# sh and bash are not here, being present upon every machine this could install
+# to and so wanted by nobody's depends_on.  A formula is asked to declare what
+# Homebrew would otherwise have to find for it.
+INTERPRETERS = %w{ruby python node perl}
+
+def interpreter(name)
+  binary = File.join(repository_path(name), 'bin', name)
+  return nil unless File.exist?(binary)
+  first = File.open(binary, &:gets).to_s
+  return nil unless first.start_with?('#!')
+  INTERPRETERS.find{|candidate| first.include?(candidate)}
+end
+
+def interpreter_finding(name, path)
+  wanted = interpreter(name)
+  return nil unless wanted
+  return nil if dependencies(path).include?(wanted)
+  "bin/#{name} is a #{wanted} script and the formula depends_on no #{wanted}"
+end
+
+# An unqualified name resolves against homebrew/core first, so depends_on 'moby'
+# finds Docker's rather than this tap's.  A dependency upon a formula in this
+# tap has to name the tap.
+def unqualified_dependency_findings(path)
+  dependencies(path).select{|dependency| !dependency.include?('/') && formula_names.include?(dependency)}.collect do |dependency|
+    "depends_on '#{dependency}' names a formula in this tap unqualified, so it resolves against homebrew/core rather than here"
+  end
+end
+
+def formula_names
+  @formula_names ||= formula_paths.collect{|path| formula_name(path)}
+end
+
 # Three kinds of check: those reading what the repository tracks, those reading
 # the working directory, and those reading only the formula.  A missing
 # repository stops the first two and has nothing to say about the third, which
@@ -282,13 +335,17 @@ end
 # of a repository with no tags and no commits either, and the wrong reason.  The
 # CHANGELOG is read from the working directory rather than from git, so the
 # version check still has something to say.
+def formula_only_findings(path)
+  [*unrecognised_findings(path), unstaged_resource_finding(path), *unqualified_dependency_findings(path)].compact
+end
+
 def findings_for(name, path)
-  formula_only = unrecognised_findings(path)
+  formula_only = formula_only_findings(path)
   return ["no repository at #{repository_path(name)}", *formula_only] unless repository?(name)
   unless commits?(name)
     return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact
   end
-  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), *formula_only].compact
+  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), *formula_only].compact
 end
 
 def findings

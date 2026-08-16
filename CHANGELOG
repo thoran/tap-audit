@@ -2,6 +2,19 @@
 
 ## 20260817
 
+0.4.0: Report resources installed by nothing, a ruby script whose formula depends upon no ruby, and a dependency named without qualification.
+
+1. ~ bin/tap-audit: + dependencies()
+2. ~ bin/tap-audit: + unstaged_resource_finding()
+3. ~ bin/tap-audit: + interpreter()
+4. ~ bin/tap-audit: + interpreter_finding()
+5. ~ bin/tap-audit: + unqualified_dependency_findings()
+6. ~ bin/tap-audit: + formula_names()
+7. ~ bin/tap-audit: + formula_only_findings()
+8. ~ bin/tap-audit: ~ findings_for()
+9. ~ test/tap-audit_test.rb
+
+
 0.3.0: Tell a repository with no commits from one which tracks nothing, ls-files answering empty for both.
 
 1. ~ bin/tap-audit: + commits?()

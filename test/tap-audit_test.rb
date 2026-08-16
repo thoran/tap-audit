@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
 # 20260817
-# 0.1.0
+# 0.2.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -20,11 +20,12 @@ BIN = ENV['TAP_AUDIT'] || File.expand_path('../bin/tap-audit', __dir__)
 
 # A formula with the parts each example varies and defaults for the rest, so
 # that an example states the one thing it is about.
-def formula_source(name, version: '1.0.0', tag: nil, install: nil, resources: {})
+def formula_source(name, version: '1.0.0', tag: nil, install: nil, resources: {}, depends_on: ['ruby'])
   url = tag ? "url 'https://github.com/thoran/#{name}.git', tag: '#{tag}'" : "url 'https://github.com/thoran/#{name}.git'"
   body = install || "bin.install 'bin/#{name}'"
   declarations = resources.collect{|gem_name, gem_version| resource_source(gem_name, gem_version)}.join
-  "class #{name.capitalize} < Formula\n  version '#{version}'\n\n  #{url}\n\n#{declarations}  def install\n#{body.lines.collect{|l| '    ' + l}.join}\n  end\nend\n"
+  dependencies = depends_on.collect{|dependency| "  depends_on '#{dependency}'\n"}.join
+  "class #{name.capitalize} < Formula\n  version '#{version}'\n\n  #{url}\n\n#{dependencies}\n#{declarations}  def install\n#{body.lines.collect{|l| '    ' + l}.join}\n  end\nend\n"
 end
 
 def resource_source(gem_name, gem_version)
@@ -35,12 +36,19 @@ def git(directory, *arguments)
   system('git', '-C', directory, *arguments, out: File::NULL, err: File::NULL)
 end
 
+# bin/<name> with a first line, the interpreter check reading no further.
+def write_binary(directory, name, shebang)
+  FileUtils.mkdir_p(File.join(directory, 'bin'))
+  File.write(File.join(directory, 'bin', name), "#{shebang}\n# #{name}\n")
+end
+
 # A repository with a commit unless one is not wanted, ls-files reporting
 # nothing before the first commit and the directory check then having nothing to
 # miss, which is a state of its own and tested below.
-def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true)
+def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil)
   directory = File.join(root, name)
   files.each{|f| FileUtils.mkdir_p(File.dirname(File.join(directory, f))); FileUtils.touch(File.join(directory, f))}
+  write_binary(directory, name, shebang) if shebang
   File.write(File.join(directory, 'CHANGELOG'), "# CHANGELOG\n\n## 20260817\n\n#{changelog}: whatever it was.\n") if changelog
   git(directory, 'init', '--quiet') || (FileUtils.mkdir_p(directory) && git(directory, 'init', '--quiet'))
   return unless commits
@@ -73,6 +81,10 @@ def in_fixture(formulae: {}, repositories: {})
     yield stdout + stderr, status.exitstatus
   end
 end
+
+# A def install which both stages its resources and installs the tree, for the
+# examples which declare a resource and are not about whether it is staged.
+STAGING = "resources.each do |r|\n  r.fetch\nend\nlibexec.install 'bin', 'lib'"
 
 # One formula and one repository agreeing about everything, which every example
 # below varies exactly one thing from.
@@ -239,8 +251,8 @@ describe 'the same gem at more than one version' do
   it 'says nothing where every formula agrees' do
     in_fixture(
       formulae: {
-        'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'", resources: {'switches.rb' => '0.10.3'}),
-        'other' => formula_source('other', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'", resources: {'switches.rb' => '0.10.3'}),
+        'thing' => formula_source('thing', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.10.3'}),
+        'other' => formula_source('other', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.10.3'}),
       },
       repositories: {
         'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0']},
@@ -256,8 +268,8 @@ describe 'the same gem at more than one version' do
   it 'names the versions and the formulae holding them' do
     in_fixture(
       formulae: {
-        'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'", resources: {'switches.rb' => '0.10.3'}),
-        'other' => formula_source('other', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'", resources: {'switches.rb' => '0.9.15'}),
+        'thing' => formula_source('thing', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.10.3'}),
+        'other' => formula_source('other', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.9.15'}),
       },
       repositories: {
         'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0']},
@@ -275,7 +287,7 @@ describe 'the same gem at more than one version' do
       "  def install", "  # resource 'switches.rb' do\n  #   url 'https://rubygems.org/downloads/switches.rb-0.9.15.gem'\n  # end\n\n  def install")
     in_fixture(
       formulae: {
-        'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'", resources: {'switches.rb' => '0.10.3'}),
+        'thing' => formula_source('thing', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.10.3'}),
         'other' => commented,
       },
       repositories: {
@@ -351,6 +363,124 @@ describe 'the directories it is given' do
       output, status = audit('--formulae', root, '--repositories', root)
       _(output).must_include '0 of 0 formulae have something to answer for'
       _(status).must_equal 0
+    end
+  end
+end
+
+# A resource is fetched and installed by def install or it is not installed at
+# all.  Declaring one asks Homebrew for nothing by itself, which is easy to miss
+# because the declaration looks like the whole of the job.
+describe 'resources declared and never installed' do
+  it 'says nothing where def install stages them' do
+    in_fixture(**agreeing(
+      install: "resources.each do |r|\n  r.fetch\nend\nlibexec.install 'bin', 'lib'",
+      resources: {'switches.rb' => '0.10.3'},
+    )) do |output, status|
+      _(output).wont_include 'declared and installed by nothing'
+      _(status).must_equal 0
+    end
+  end
+
+  # moby's case: two resources declared, def install mentioning neither, so both
+  # are resolved from whichever gem home the invoking ruby has.
+  it 'reports resources which nothing in def install installs' do
+    in_fixture(**agreeing(
+      install: "libexec.install 'bin', 'lib'",
+      resources: {'switches.rb' => '0.10.3', 'mechanize' => '2.9.1'},
+    )) do |output, status|
+      _(output).must_include '2 resources declared and installed by nothing in def install'
+      _(status).must_equal 1
+    end
+  end
+
+  it 'says nothing where no resource is declared at all' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include 'declared and installed by nothing'
+    end
+  end
+end
+
+# Not every formula wants depends_on 'ruby'.  The question is whether what is
+# declared matches the interpreter the installed script actually names.
+describe 'the interpreter check' do
+  def with_shebang(shebang, depends_on:)
+    {
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'", depends_on: depends_on)},
+      repositories: {'thing' => {files: ['lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], shebang: shebang}},
+    }
+  end
+
+  it 'says nothing where a ruby script depends_on ruby' do
+    in_fixture(**with_shebang('#!/usr/bin/env ruby', depends_on: ['ruby'])) do |output, status|
+      _(output).wont_include 'depends_on no'
+      _(status).must_equal 0
+    end
+  end
+
+  it 'reports a ruby script which depends_on nothing' do
+    in_fixture(**with_shebang('#!/usr/bin/env ruby', depends_on: [])) do |output, status|
+      _(output).must_include 'bin/thing is a ruby script and the formula depends_on no ruby'
+      _(status).must_equal 1
+    end
+  end
+
+  it 'reports a python script beside a formula depending upon ruby' do
+    in_fixture(**with_shebang('#!/usr/bin/env python3', depends_on: ['ruby'])) do |output, _status|
+      _(output).must_include 'bin/thing is a python script and the formula depends_on no python'
+    end
+  end
+
+  # gem-publish is a shell script and correctly declares nothing, sh and bash
+  # being upon every machine this could install to.
+  it 'asks nothing of a shell script' do
+    in_fixture(**with_shebang('#!/usr/bin/env sh', depends_on: [])) do |output, status|
+      _(output).wont_include 'depends_on no'
+      _(status).must_equal 0
+    end
+  end
+
+  it 'says nothing where there is no binary to read' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include 'depends_on no'
+    end
+  end
+end
+
+# An unqualified name resolves against homebrew/core first, so a dependency upon
+# a formula in this tap has to name the tap or it finds someone else's.
+describe 'a dependency upon another formula in the tap' do
+  def two_formulae(dependency)
+    {
+      formulae: {
+        'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'", depends_on: ['ruby', dependency]),
+        'other' => formula_source('other', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'"),
+      },
+      repositories: {
+        'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0']},
+        'other' => {files: ['bin/other', 'lib/Other.rb'], changelog: '1.0.0', tags: ['v1.0.0']},
+      },
+    }
+  end
+
+  it 'reports it where the name is unqualified' do
+    in_fixture(**two_formulae('other')) do |output, status|
+      _(output).must_include "depends_on 'other' names a formula in this tap unqualified"
+      _(status).must_equal 1
+    end
+  end
+
+  it 'says nothing where the tap is named' do
+    in_fixture(**two_formulae('thoran/tap/other')) do |output, status|
+      _(output).wont_include 'names a formula in this tap unqualified'
+      _(status).must_equal 0
+    end
+  end
+
+  # A name which is not in this tap is homebrew/core's to resolve and none of
+  # this tool's business.
+  it 'says nothing about a dependency which is not a formula here' do
+    in_fixture(**two_formulae('openssl@3')) do |output, _status|
+      _(output).wont_include 'names a formula in this tap unqualified'
     end
   end
 end
