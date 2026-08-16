@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 # tap-audit
 
-# 20260816
-# 0.1.0
+# 20260817
+# 0.2.0
 
 require 'switches.rb'
 
@@ -84,6 +84,77 @@ end
 # separator left behind by the interpolation is not a path from the root.
 def repository_relative(string)
   string.gsub(/\#\{[^}]*\}/, '').sub(%r{\A/+}, '').sub(%r{/+\z}, '')
+end
+
+# The lines of def install, comments and blanks dropped.  The end which closes
+# the method is the one at the method's own indent, a deeper one closing a block
+# within it.
+def install_body(path)
+  @install_body ||= {}
+  @install_body[path] ||= (
+    body = []
+    depth = nil
+    formula_source(path).lines.each do |line|
+      if depth.nil?
+        depth = line[/\A */].length if line =~ /^\s*def install\b/
+        next
+      end
+      break if line =~ /\A\s{#{depth}}end\s*\z/
+      body << line
+    end
+    body.reject{|line| line.strip.empty? || line.strip.start_with?('#')}
+  )
+end
+
+# A statement is finished where nothing is left open and nothing is left
+# dangling.  Three things carry a statement onto the next line here:
+# write_env_script's parentheses, resources.each's do, and the trailing comma of
+# a system call's argument list.  Each of the three is in the tap already, and a
+# statement rejoined wrongly is a statement reported as unrecognised, so this
+# decides the false positives rather than the whitelist does.
+def continued?(text)
+  text.count('(') != text.count(')') ||
+    text.count('{') != text.count('}') ||
+    text.scan(/\bdo\b/).length != text.scan(/\bend\b/).length ||
+    text.strip.end_with?(',')
+end
+
+def logical_lines(lines)
+  statements = []
+  pending = ''
+  lines.each do |line|
+    pending += line
+    next if continued?(pending)
+    statements << pending.strip
+    pending = ''
+  end
+  statements << pending.strip unless pending.strip.empty?
+  statements
+end
+
+INSTALL_IDIOMS = [
+  /\.install\b/,
+  /\bFileUtils\.\w+/,
+  /\Asystem\b/,
+  /\AENV\[/,
+  /\Aresources\b/,
+  /\bwrite_env_script\b/,
+]
+
+def recognised?(statement)
+  INSTALL_IDIOMS.any?{|idiom| statement =~ idiom}
+end
+
+# The check which finds a FileUtils.cp_r without anyone having thought of
+# FileUtils.cp_r.  What def install does decides what reaches the keg, so a
+# statement this cannot classify is one whose effect upon the keg is unknown,
+# and saying so is the whole of the job.  Silence in its place is how 0.0.0
+# reported moby's lib as named by no install line while it was being installed
+# by a means not looked for.
+def unrecognised_findings(path)
+  logical_lines(install_body(path)).reject{|statement| recognised?(statement)}.collect do |statement|
+    "unrecognised in def install, so what it puts in the keg is unknown: #{statement.lines.first.strip}"
+  end
 end
 
 def installed_paths(path)
@@ -194,9 +265,13 @@ def resource_findings
   end
 end
 
+# Two kinds of check: those which read the repository and those which read only
+# the formula.  A missing repository stops the first and has nothing to say
+# about the second, which 0.2.0 first got wrong by returning upon it.
 def findings_for(name, path)
-  return ["no repository at #{repository_path(name)}"] unless repository?(name)
-  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path)].compact
+  formula_only = unrecognised_findings(path)
+  return ["no repository at #{repository_path(name)}", *formula_only] unless repository?(name)
+  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), *formula_only].compact
 end
 
 def findings

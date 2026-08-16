@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 20260817
+
+0.2.0: Report a statement in def install which cannot be classified, its effect upon the keg being unknown.
+
+1. ~ bin/tap-audit: + install_body()
+2. ~ bin/tap-audit: + continued?()
+3. ~ bin/tap-audit: + logical_lines()
+4. ~ bin/tap-audit: + recognised?()
+5. ~ bin/tap-audit: + unrecognised_findings()
+6. ~ bin/tap-audit: ~ findings_for()
+7. + test/tap-audit_test.rb
+
+
 ## 20260816
 
 0.1.0: Report the same gem pinned at more than one version, apart from the formulae, that being a fault of the tap rather than of either.
