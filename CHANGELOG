@@ -2,6 +2,18 @@
 
 ## 20260817
 
+0.5.0: Report something earlier upon the search path answering to the name, which no reading of the tap could find.
+
+1. ~ bin/tap-audit: + search_directories()
+2. ~ bin/tap-audit: + brew_bin()
+3. ~ bin/tap-audit: + directories_ahead_of_brew()
+4. ~ bin/tap-audit: + shadow_finding()
+5. ~ bin/tap-audit: ~ usage()
+6. ~ bin/tap-audit: ~ switches()
+7. ~ bin/tap-audit: ~ findings_for()
+8. ~ test/tap-audit_test.rb
+
+
 0.4.0: Report resources installed by nothing, a ruby script whose formula depends upon no ruby, and a dependency named without qualification.
 
 1. ~ bin/tap-audit: + dependencies()

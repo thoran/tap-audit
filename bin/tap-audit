@@ -2,11 +2,13 @@
 # tap-audit
 
 # 20260817
-# 0.4.0
+# 0.5.0
 
 require 'switches.rb'
 
+DEFAULT_BREW_PREFIX = '/opt/homebrew'
 DEFAULT_REPOSITORIES_DIRECTORY = File.expand_path('..')
+DEFAULT_SEARCH_PATH = ENV['PATH'].to_s
 DEFAULT_TAP_DIRECTORY = File.expand_path('.')
 UNINSTALLED_DIRECTORIES = %w{doc spec test}
 
@@ -18,6 +20,8 @@ def usage
   puts "Options:"
   puts "  -r, --repositories DIR  Where the source repositories are (default: #{DEFAULT_REPOSITORIES_DIRECTORY})"
   puts "  -f, --formulae DIR      Where the formulae are (default: #{DEFAULT_TAP_DIRECTORY})"
+  puts "  -s, --search-path PATH  Colon-separated directories, searched in order (default: $PATH)"
+  puts "  -b, --brew-prefix DIR   Where Homebrew keeps bin (default: #{DEFAULT_BREW_PREFIX})"
   puts "  -h, --help              Show this help"
   puts
   puts "Exits 1 where anything was found, so it can gate a release."
@@ -27,6 +31,8 @@ def switches
   @switches ||= Switches.new do |s|
     s.optional(:r, :repositories, default: DEFAULT_REPOSITORIES_DIRECTORY){'Where the source repositories are'}
     s.optional(:f, :formulae, default: DEFAULT_TAP_DIRECTORY){'Where the formulae are'}
+    s.optional(:s, :search_path, default: DEFAULT_SEARCH_PATH){'Colon-separated directories, searched in order'}
+    s.optional(:b, :brew_prefix, default: DEFAULT_BREW_PREFIX){'Where Homebrew keeps bin'}
     s.perform(:h, :help?) do
       usage
       exit
@@ -335,12 +341,40 @@ end
 # of a repository with no tags and no commits either, and the wrong reason.  The
 # CHANGELOG is read from the working directory rather than from git, so the
 # version check still has something to say.
+def search_directories
+  @search_directories ||= switches.search_path.split(File::PATH_SEPARATOR).reject(&:empty?)
+end
+
+def brew_bin
+  @brew_bin ||= File.join(switches.brew_prefix, 'bin')
+end
+
+# Everything searched before Homebrew's own bin.  A formula installs to that bin
+# and nowhere earlier, so anything of the same name found before it is what the
+# name actually runs.
+def directories_ahead_of_brew
+  return [] unless search_directories.include?(brew_bin)
+  search_directories[0...search_directories.index(brew_bin)]
+end
+
+# The consumer half.  A formula can be correct in every other respect and still
+# never be what runs: a gem shim in ~/.gem or a copy in ~/bin sits earlier on
+# the path and answers to the name instead.  moby had exactly this during the
+# session which produced this tool — the shim answered and was itself broken —
+# and it is invisible from the tap, which is why nothing else here would find
+# it.
+def shadow_finding(name)
+  shadow = directories_ahead_of_brew.find{|directory| File.exist?(File.join(directory, name))}
+  return nil unless shadow
+  "#{File.join(shadow, name)} is searched before #{brew_bin}, so it answers to the name and the formula's own copy never runs"
+end
+
 def formula_only_findings(path)
   [*unrecognised_findings(path), unstaged_resource_finding(path), *unqualified_dependency_findings(path)].compact
 end
 
 def findings_for(name, path)
-  formula_only = formula_only_findings(path)
+  formula_only = [*formula_only_findings(path), shadow_finding(name)].compact
   return ["no repository at #{repository_path(name)}", *formula_only] unless repository?(name)
   unless commits?(name)
     return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact

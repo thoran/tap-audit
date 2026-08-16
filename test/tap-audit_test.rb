@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
 # 20260817
-# 0.2.0
+# 0.3.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -77,7 +77,7 @@ def in_fixture(formulae: {}, repositories: {})
     FileUtils.mkdir_p([tap, repositories_directory])
     formulae.each{|name, source| File.write(File.join(tap, "#{name}.rb"), source)}
     repositories.each{|name, options| make_repository(repositories_directory, name, **options)}
-    stdout, stderr, status = Open3.capture3(BIN, '--formulae', tap, '--repositories', repositories_directory)
+    stdout, stderr, status = Open3.capture3(BIN, '--formulae', tap, '--repositories', repositories_directory, '--search-path', '')
     yield stdout + stderr, status.exitstatus
   end
 end
@@ -481,6 +481,63 @@ describe 'a dependency upon another formula in the tap' do
   it 'says nothing about a dependency which is not a formula here' do
     in_fixture(**two_formulae('openssl@3')) do |output, _status|
       _(output).wont_include 'names a formula in this tap unqualified'
+    end
+  end
+end
+
+# The consumer half.  A formula can be correct in every other respect and still
+# never be what runs, something earlier upon the search path answering to the
+# name instead.  moby had this during the session which produced the tool: a gem
+# shim in ~/.gem answered, and was itself broken.  It is invisible from the tap,
+# so nothing else here would find it.
+describe 'a copy which shadows the formula' do
+  def in_path_fixture(ahead: [], behind: ['thing'], brew_on_path: true)
+    Dir.mktmpdir do |root|
+      tap = File.join(root, 'tap')
+      repositories = File.join(root, 'repositories')
+      early = File.join(root, 'early')
+      late = File.join(root, 'late')
+      brew_bin = File.join(root, 'prefix', 'bin')
+      FileUtils.mkdir_p([tap, repositories, early, late, brew_bin])
+      ahead.each{|n| FileUtils.touch(File.join(early, n))}
+      behind.each{|n| FileUtils.touch(File.join(brew_bin, n))}
+      File.write(File.join(tap, 'thing.rb'), formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'"))
+      make_repository(repositories, 'thing', files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'])
+      search = brew_on_path ? [early, brew_bin, late] : [early, late]
+      yield(*audit('--formulae', tap, '--repositories', repositories,
+        '--search-path', search.join(File::PATH_SEPARATOR), '--brew-prefix', File.join(root, 'prefix')))
+    end
+  end
+
+  it 'reports a copy searched before Homebrew bin' do
+    in_path_fixture(ahead: ['thing']) do |output, status|
+      _(output).must_match(%r{/early/thing is searched before .*/prefix/bin})
+      _(output).must_include %q{the formula's own copy never runs}
+      _(status).must_equal 1
+    end
+  end
+
+  it 'says nothing where nothing is ahead of it' do
+    in_path_fixture(ahead: []) do |output, status|
+      _(output).wont_include 'is searched before'
+      _(status).must_equal 0
+    end
+  end
+
+  # A copy after Homebrew's bin is not a shadow: the formula answers first.
+  it 'says nothing about a copy searched after Homebrew bin' do
+    in_path_fixture(ahead: ['something-else']) do |output, status|
+      _(output).wont_include 'is searched before'
+      _(status).must_equal 0
+    end
+  end
+
+  # Nothing can shadow a bin which is not searched at all, and reporting the
+  # first directory on the path as a shadow would be nonsense.
+  it 'says nothing where Homebrew bin is not upon the search path' do
+    in_path_fixture(ahead: ['thing'], brew_on_path: false) do |output, status|
+      _(output).wont_include 'is searched before'
+      _(status).must_equal 0
     end
   end
 end
