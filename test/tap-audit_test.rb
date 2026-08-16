@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
 # 20260817
-# 0.0.0
+# 0.1.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -35,16 +35,31 @@ def git(directory, *arguments)
   system('git', '-C', directory, *arguments, out: File::NULL, err: File::NULL)
 end
 
-# A repository with a commit, since ls-files reports nothing before one and the
-# directory check would then find nothing to miss.
-def make_repository(root, name, files: [], changelog: nil, tags: [])
+# A repository with a commit unless one is not wanted, ls-files reporting
+# nothing before the first commit and the directory check then having nothing to
+# miss, which is a state of its own and tested below.
+def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true)
   directory = File.join(root, name)
   files.each{|f| FileUtils.mkdir_p(File.dirname(File.join(directory, f))); FileUtils.touch(File.join(directory, f))}
   File.write(File.join(directory, 'CHANGELOG'), "# CHANGELOG\n\n## 20260817\n\n#{changelog}: whatever it was.\n") if changelog
   git(directory, 'init', '--quiet') || (FileUtils.mkdir_p(directory) && git(directory, 'init', '--quiet'))
+  return unless commits
   git(directory, 'add', '.')
   git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', 'in')
   tags.each{|t| git(directory, 'tag', t)}
+end
+
+def audit(*arguments)
+  stdout, stderr, status = Open3.capture3(BIN, *arguments)
+  [stdout + stderr, status.exitstatus]
+end
+
+# A formula beside a repository which has been git init'd and left alone.
+def commitless(version: '1.0.0', files: ['bin/thing', 'lib/Thing.rb'])
+  {
+    formulae: {'thing' => formula_source('thing', version: version, tag: 'v1.0.0', install: "bin.install 'bin/thing'")},
+    repositories: {'thing' => {files: files, changelog: '1.0.0', commits: false}},
+  }
 end
 
 def in_fixture(formulae: {}, repositories: {})
@@ -270,6 +285,72 @@ describe 'the same gem at more than one version' do
     ) do |output, _status|
       _(output).wont_include 'the same gem at more than one version'
       _(output).must_include '0 gems are pinned at more than one version'
+    end
+  end
+end
+
+# A directory which has been git init'd and left alone is not the same as one
+# with no .git, and the difference matters: ls-files answers empty rather than
+# failing, so every check reading it passes upon having found nothing.
+describe 'a repository which exists but has no commits' do
+  it 'says so' do
+    in_fixture(**commitless) do |output, status|
+      _(output).must_include 'the repository has no commits, so what it tracks and what it tags cannot be read'
+      _(status).must_equal 1
+    end
+  end
+
+  # The silent pass 0.3.0 was written for: lib is on the disk and installed by
+  # nothing, and 0.2.0 said nothing at all about it.
+  it 'reports no directory finding, rather than a passing one drawn from nothing' do
+    in_fixture(**commitless) do |output, _status|
+      _(output).wont_include 'is in the repository and named by no install line'
+    end
+  end
+
+  # "not a tag in the repository" is true of a repository with no tags, and is
+  # the wrong reason to give for it.
+  it 'reports no tag finding either' do
+    in_fixture(**commitless) do |output, _status|
+      _(output).wont_include 'url names'
+    end
+  end
+
+  # The CHANGELOG is read from the working directory rather than from git, so it
+  # is the one thing still worth saying.
+  it 'still compares the version against the CHANGELOG' do
+    in_fixture(**commitless(version: '0.9.0')) do |output, _status|
+      _(output).must_include 'the formula says 0.9.0 and the CHANGELOG says 1.0.0'
+    end
+  end
+end
+
+describe 'the directories it is given' do
+  it 'refuses a --formulae which is not there' do
+    Dir.mktmpdir do |root|
+      absent = File.join(root, 'absent')
+      output, status = audit('--formulae', absent, '--repositories', root)
+      _(output).must_include "No such directory: #{absent}"
+      _(status).must_equal 1
+    end
+  end
+
+  it 'refuses a --repositories which is not there' do
+    Dir.mktmpdir do |root|
+      absent = File.join(root, 'absent')
+      output, status = audit('--formulae', root, '--repositories', absent)
+      _(output).must_include "No such directory: #{absent}"
+      _(status).must_equal 1
+    end
+  end
+
+  # A tap holding no formulae is not a fault, and nothing is a strange thing to
+  # exit 1 upon.
+  it 'reports nothing and exits 0 where the tap holds no formulae' do
+    Dir.mktmpdir do |root|
+      output, status = audit('--formulae', root, '--repositories', root)
+      _(output).must_include '0 of 0 formulae have something to answer for'
+      _(status).must_equal 0
     end
   end
 end

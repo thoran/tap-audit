@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20260817
-# 0.2.0
+# 0.3.0
 
 require 'switches.rb'
 
@@ -265,12 +265,29 @@ def resource_findings
   end
 end
 
-# Two kinds of check: those which read the repository and those which read only
-# the formula.  A missing repository stops the first and has nothing to say
-# about the second, which 0.2.0 first got wrong by returning upon it.
+def commits?(name)
+  !git(name, 'rev-parse', '--verify', 'HEAD').strip.empty?
+end
+
+# Three kinds of check: those reading what the repository tracks, those reading
+# the working directory, and those reading only the formula.  A missing
+# repository stops the first two and has nothing to say about the third, which
+# 0.2.0 first got wrong by returning upon it.
+#
+# A repository without commits tracks nothing, so ls-files answers empty and the
+# directory check passes upon having found nothing rather than upon there being
+# nothing to find.  Said outright: a silent pass is the fault this tool exists
+# to stop giving, and it is the same fault as the one it was written to catch.
+# The tag finding is dropped with it, "not a tag in the repository" being true
+# of a repository with no tags and no commits either, and the wrong reason.  The
+# CHANGELOG is read from the working directory rather than from git, so the
+# version check still has something to say.
 def findings_for(name, path)
   formula_only = unrecognised_findings(path)
   return ["no repository at #{repository_path(name)}", *formula_only] unless repository?(name)
+  unless commits?(name)
+    return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact
+  end
   [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), *formula_only].compact
 end
 

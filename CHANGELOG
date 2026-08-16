@@ -2,6 +2,13 @@
 
 ## 20260817
 
+0.3.0: Tell a repository with no commits from one which tracks nothing, ls-files answering empty for both.
+
+1. ~ bin/tap-audit: + commits?()
+2. ~ bin/tap-audit: ~ findings_for()
+3. ~ test/tap-audit_test.rb
+
+
 0.2.0: Report a statement in def install which cannot be classified, its effect upon the keg being unknown.
 
 1. ~ bin/tap-audit: + install_body()
