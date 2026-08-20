@@ -2,10 +2,11 @@
 # tap-audit
 
 # 20260821
-# 0.7.0
+# 0.8.0
 
 require 'switches.rb'
 
+DEFAULT_BRANCH = 'master'
 DEFAULT_BREW_PREFIX = '/opt/homebrew'
 DEFAULT_REPOSITORIES_DIRECTORY = File.expand_path('..')
 DEFAULT_SEARCH_PATH = ENV['PATH'].to_s
@@ -22,6 +23,7 @@ def usage
   puts "  -f, --formulae DIR      Where the formulae are (default: #{DEFAULT_TAP_DIRECTORY})"
   puts "  -s, --search-path PATH  Colon-separated directories, searched in order (default: $PATH)"
   puts "  -b, --brew-prefix DIR   Where Homebrew keeps bin (default: #{DEFAULT_BREW_PREFIX})"
+  puts "  -B, --branch NAME       The branch each repository releases from (default: #{DEFAULT_BRANCH})"
   puts "  -h, --help              Show this help"
   puts
   puts "Exits 1 where anything was found, so it can gate a release."
@@ -33,6 +35,7 @@ def switches
     s.optional(:f, :formulae, default: DEFAULT_TAP_DIRECTORY){'Where the formulae are'}
     s.optional(:s, :search_path, default: DEFAULT_SEARCH_PATH){'Colon-separated directories, searched in order'}
     s.optional(:b, :brew_prefix, default: DEFAULT_BREW_PREFIX){'Where Homebrew keeps bin'}
+    s.optional(:B, :branch, default: DEFAULT_BRANCH){'The branch each repository releases from'}
     s.perform(:h, :help?) do
       usage
       exit
@@ -179,6 +182,11 @@ def git(name, *arguments)
   IO.popen(['git', '-C', repository_path(name), *arguments], err: File::NULL, &:read)
 end
 
+# For the questions git answers by exit status rather than upon stdout.
+def git?(name, *arguments)
+  system('git', '-C', repository_path(name), *arguments, out: File::NULL, err: File::NULL)
+end
+
 def tags(name)
   git(name, 'tag', '--list').lines.map(&:strip)
 end
@@ -277,6 +285,58 @@ def untagged_findings(name, path)
     "tags: #{missing.length} versions have no tag, #{missing.first} to #{missing.last}"
   end
   findings
+end
+
+# Reachability is asked of the branch by name rather than of HEAD.  A checkout
+# left detached — at a tag, mid-bisect, mid-rebase — answers the question about
+# wherever it is standing, under which every tag above that point reads as
+# orphaned.  An auditor arriving at a verdict from the wrong question is the
+# fault this tool exists to stop giving.
+def branch?(name)
+  git?(name, 'rev-parse', '--verify', '--quiet', "refs/heads/#{switches.branch}")
+end
+
+def reachable?(name, commit)
+  git?(name, 'merge-base', '--is-ancestor', commit, "refs/heads/#{switches.branch}")
+end
+
+def tree(name, revision)
+  git(name, 'rev-parse', "#{revision}^{tree}").strip
+end
+
+# The commit the branch says is a version, found by its subject and not by its
+# tag: the tag is the thing under suspicion, so asking it would be asking the
+# accused.  Where a version is the subject of more than one commit the newest
+# answers, summary_findings having already reported the duplication.
+def branch_commit(name, version)
+  line = git(name, 'log', '--format=%H %s', "refs/heads/#{switches.branch}").lines.find do |entry|
+    entry.split(' ', 2).last.to_s.start_with?("#{version}: ")
+  end
+  line&.split(' ', 2)&.first
+end
+
+def orphaned_tags(name)
+  tags(name).reject{|tag| reachable?(name, "#{tag}^{commit}")}
+end
+
+# Reachability finds the candidates; the tree decides which of them matter.  An
+# --amend or a rewrite orphans a tag silently — git status says nothing, git tag
+# still lists it, and it still resolves, to code outside the branch.  Where the
+# tree is the same the tag is bookkeeping and is said so; where it differs the
+# repository and the tag disagree about what that version was, and a pin there
+# installs the version the rewrite abandoned, permanently, a pin not drifting.
+def orphan_finding(name, tag)
+  version = tag[/\Av?(\d+\.\d+\.\d+)\z/, 1]
+  return "orphan: #{tag} names a commit outside #{switches.branch}" unless version
+  commit = branch_commit(name, version)
+  return "orphan: #{tag} names a commit outside #{switches.branch}, which has no commit saying #{version}" unless commit
+  return "orphan: #{tag} names a commit outside #{switches.branch}, its tree being the tree of #{switches.branch}'s #{version}" if tree(name, tag) == tree(name, commit)
+  "orphan: #{tag} names a different tree from #{switches.branch}'s #{version}, so a pin there installs what the repository has since abandoned"
+end
+
+def orphan_findings(name)
+  return ["orphan: no #{switches.branch} branch, so no tag can be tested against the one released from"] unless branch?(name)
+  orphaned_tags(name).collect{|tag| orphan_finding(name, tag)}
 end
 
 def version_finding(name, path)
@@ -458,7 +518,7 @@ def findings_for(name, path)
   unless commits?(name)
     return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact
   end
-  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *untagged_findings(name, path), *formula_only].compact
+  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *untagged_findings(name, path), *orphan_findings(name), *formula_only].compact
 end
 
 def findings

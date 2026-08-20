@@ -2,6 +2,22 @@
 
 ## 20260821
 
+0.8.0: Report a tag naming a commit outside the branch released from, the tree deciding which of them matter.
+
+1. ~ bin/tap-audit: + git?()
+2. ~ bin/tap-audit: + branch?()
+3. ~ bin/tap-audit: + reachable?()
+4. ~ bin/tap-audit: + tree()
+5. ~ bin/tap-audit: + branch_commit()
+6. ~ bin/tap-audit: + orphaned_tags()
+7. ~ bin/tap-audit: + orphan_finding()
+8. ~ bin/tap-audit: + orphan_findings()
+9. ~ bin/tap-audit: ~ usage()
+10. ~ bin/tap-audit: ~ switches()
+11. ~ bin/tap-audit: ~ findings_for()
+12. ~ test/tap-audit_test.rb
+
+
 0.7.0: Report every version the repository states which carries no tag, that being the precondition for pinning.
 
 1. ~ bin/tap-audit: + repository_versions()

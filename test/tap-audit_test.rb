@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
-# 20260821
-# 0.5.0
+# 20260822
+# 0.6.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -45,7 +45,25 @@ end
 # A repository with a commit unless one is not wanted, ls-files reporting
 # nothing before the first commit and the directory check then having nothing to
 # miss, which is a state of its own and tested below.
-def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false)
+# An amend leaves any tag upon the commit it replaced, naming code outside the
+# branch: git status says nothing, git tag still lists it, and it still resolves.
+# :message keeps the tree and changes only what the commit says, which is the
+# harmless half; :content changes the tree, which is the half a pin would ship;
+# :version leaves the branch saying nothing about that version at all.
+def orphan_by(directory, how)
+  case how
+  when :message
+    git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '--amend', '-m', '1.0.0: whatever it was, reworded.')
+  when :content
+    File.write(File.join(directory, 'changed'), 'x')
+    git(directory, 'add', '.')
+    git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '--amend', '--no-edit')
+  when :version
+    git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '--amend', '-m', 'no version in this one')
+  end
+end
+
+def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false, orphan: nil, branch: nil)
   directory = File.join(root, name)
   files.each{|f| FileUtils.mkdir_p(File.dirname(File.join(directory, f))); FileUtils.touch(File.join(directory, f))}
   write_binary(directory, name, shebang) if shebang
@@ -62,6 +80,8 @@ def make_repository(root, name, files: [], changelog: nil, tags: [], commits: tr
     git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', summary)
   end
   tags.each{|t| git(directory, 'tag', t)}
+  orphan_by(directory, orphan) if orphan
+  git(directory, 'branch', '--move', branch) if branch
 end
 
 def audit(*arguments)
@@ -77,14 +97,14 @@ def commitless(version: '1.0.0', files: ['bin/thing', 'lib/Thing.rb'])
   }
 end
 
-def in_fixture(formulae: {}, repositories: {})
+def in_fixture(formulae: {}, repositories: {}, arguments: [])
   Dir.mktmpdir do |root|
     tap = File.join(root, 'tap')
     repositories_directory = File.join(root, 'repositories')
     FileUtils.mkdir_p([tap, repositories_directory])
     formulae.each{|name, source| File.write(File.join(tap, "#{name}.rb"), source)}
     repositories.each{|name, options| make_repository(repositories_directory, name, **options)}
-    stdout, stderr, status = Open3.capture3(BIN, '--formulae', tap, '--repositories', repositories_directory, '--search-path', '')
+    stdout, stderr, status = Open3.capture3(BIN, '--formulae', tap, '--repositories', repositories_directory, '--search-path', '', *arguments)
     yield stdout + stderr, status.exitstatus
   end
 end
@@ -271,6 +291,81 @@ describe 'the tag check' do
       repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0']}},
     ) do |output, _status|
       _(output).must_include 'url names v9.9.9, which is not a tag in the repository'
+    end
+  end
+end
+
+# Reachability finds the candidates and the tree decides which of them matter, a
+# tag naming a commit outside the branch being harmless where it names the same
+# code and a shipped fault where it does not.  Each example below orphans the tag
+# by a different amend, those being the three ways it happens.
+describe 'the orphan check' do
+  def orphaned(orphan:, tags: ['v1.0.0'])
+    {
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: tags, orphan: orphan}},
+    }
+  end
+
+  it 'says nothing where every tag is reachable from the branch' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include 'orphan:'
+    end
+  end
+
+  it 'reports a tag whose tree differs from the branch, that being what a pin would ship' do
+    in_fixture(**orphaned(orphan: :content)) do |output, status|
+      _(output).must_include "orphan: v1.0.0 names a different tree from master's 1.0.0"
+      _(status).must_equal 1
+    end
+  end
+
+  it 'names it bookkeeping where the tree is the same, an amended message orphaning a tag without changing a byte of code' do
+    in_fixture(**orphaned(orphan: :message)) do |output, _status|
+      _(output).must_include "orphan: v1.0.0 names a commit outside master, its tree being the tree of master's 1.0.0"
+    end
+  end
+
+  it 'says so where the branch has no commit for the version at all' do
+    in_fixture(**orphaned(orphan: :version)) do |output, _status|
+      _(output).must_include 'orphan: v1.0.0 names a commit outside master, which has no commit saying 1.0.0'
+    end
+  end
+
+  # A tag which is not a version has no entry to be compared against, so the
+  # finding stops at where it points.
+  it 'reports a tag which names no version by where it points and no further' do
+    in_fixture(**orphaned(orphan: :version, tags: ['v1.0.0', 'staging'])) do |output, _status|
+      _(output).must_include 'orphan: staging names a commit outside master'
+      _(output).wont_include 'orphan: staging names a different tree'
+    end
+  end
+
+  # The branch is asked for by name rather than of HEAD, so a repository which
+  # releases from something else is told rather than guessed at.
+  it 'asks the branch it is given' do
+    in_fixture(**orphaned(orphan: :content), arguments: ['--branch', 'master']) do |output, _status|
+      _(output).must_include "orphan: v1.0.0 names a different tree from master's 1.0.0"
+    end
+  end
+
+  it 'reports a repository which has no such branch rather than answering from wherever HEAD stands' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], branch: 'main'}},
+    ) do |output, status|
+      _(output).must_include 'orphan: no master branch, so no tag can be tested against the one released from'
+      _(status).must_equal 1
+    end
+  end
+
+  it 'finds that branch when told of it' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], branch: 'main'}},
+      arguments: ['--branch', 'main'],
+    ) do |output, _status|
+      _(output).wont_include 'orphan:'
     end
   end
 end
