@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
 # 20260821
-# 0.4.0
+# 0.5.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -193,6 +193,58 @@ describe 'the summary check' do
       repositories: {'thing' => {files: ['bin/thing'], tags: ['v1.0.0'], commit_summary: '1.0.0: whatever it was.'}},
     ) do |output, _status|
       _(output).wont_include 'summary:'
+    end
+  end
+end
+
+describe 'the untagged version check' do
+  it 'says nothing where every version has a tag' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include 'tags:'
+    end
+  end
+
+  # The one which stops the formula being pinned, reported apart from the rest.
+  it 'reports the declared version having no tag' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '1.0.0', tags: []}},
+    ) do |output, status|
+      _(output).must_include 'tags: the formula declares 1.0.0 and the repository has no tag for it'
+      _(status).must_equal 1
+    end
+  end
+
+  # moby's case: thirty-seven untagged versions would be thirty-seven findings,
+  # and the count with its range says the same thing in one line.
+  it 'collapses the older ones into a count and a range' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', version: '0.3.0', tag: 'v0.3.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '0.3.0', tags: ['v0.3.0'],
+        extra_commits: ['0.1.0: whatever it was.', '0.2.0: whatever it was.']}},
+    ) do |output, _status|
+      _(output).must_include 'tags: 2 versions have no tag, 0.1.0 to 0.2.0'
+      _(output).wont_include 'declares 0.3.0 and the repository has no tag'
+    end
+  end
+
+  it 'names the version where only one lacks a tag' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', version: '0.2.0', tag: 'v0.2.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '0.2.0', tags: ['v0.2.0'],
+        extra_commits: ['0.1.0: whatever it was.']}},
+    ) do |output, _status|
+      _(output).must_include 'tags: 0.1.0 has no tag'
+    end
+  end
+
+  # A tag naming no version is not a version without a tag.
+  it 'passes over tags which are not versions' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '1.0.0', tags: ['v1.0.0', 'accidental-fork']}},
+    ) do |output, _status|
+      _(output).wont_include 'tags:'
     end
   end
 end

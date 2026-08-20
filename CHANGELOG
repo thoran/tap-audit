@@ -2,6 +2,16 @@
 
 ## 20260821
 
+0.7.0: Report every version the repository states which carries no tag, that being the precondition for pinning.
+
+1. ~ bin/tap-audit: + repository_versions()
+2. ~ bin/tap-audit: + tagged_versions()
+3. ~ bin/tap-audit: + untagged_versions()
+4. ~ bin/tap-audit: + untagged_findings()
+5. ~ bin/tap-audit: ~ findings_for()
+6. ~ test/tap-audit_test.rb
+
+
 0.6.0: Report a version's summary in the CHANGELOG against the one in its commit, nothing holding the two together.
 
 1. ~ bin/tap-audit: + changelog_summaries()

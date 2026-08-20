@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20260821
-# 0.6.0
+# 0.7.0
 
 require 'switches.rb'
 
@@ -245,6 +245,40 @@ def summary_findings(name)
   end
 end
 
+# Every version a repository states is one something might be pinned to, and a
+# formula can only name a tag which exists.  The declared version is reported
+# apart from the rest because it is the one which stops the formula being
+# pinned at all; moby states forty-eight versions and tags eleven, so listing
+# each would bury that.
+def repository_versions(name)
+  (changelog_summaries(name) + commit_summaries(name)).collect{|line| summary_version(line)}.uniq
+end
+
+def tagged_versions(name)
+  tags(name).collect{|tag| tag[/\Av?(\d+\.\d+\.\d+)\z/, 1]}.compact
+end
+
+def untagged_versions(name)
+  (repository_versions(name) - tagged_versions(name)).sort_by{|version| Gem::Version.new(version)}
+end
+
+def untagged_findings(name, path)
+  missing = untagged_versions(name)
+  return [] if missing.empty?
+  findings = []
+  if missing.include?(declared_version(path))
+    findings << "tags: the formula declares #{declared_version(path)} and the repository has no tag for it"
+    missing -= [declared_version(path)]
+  end
+  return findings if missing.empty?
+  findings << if missing.length == 1
+    "tags: #{missing.first} has no tag"
+  else
+    "tags: #{missing.length} versions have no tag, #{missing.first} to #{missing.last}"
+  end
+  findings
+end
+
 def version_finding(name, path)
   return nil unless repository_version(name)
   return nil if repository_version(name) == declared_version(path)
@@ -424,7 +458,7 @@ def findings_for(name, path)
   unless commits?(name)
     return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact
   end
-  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *formula_only].compact
+  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *untagged_findings(name, path), *formula_only].compact
 end
 
 def findings
