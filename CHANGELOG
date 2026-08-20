@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 20260821
+
+0.6.0: Report a version's summary in the CHANGELOG against the one in its commit, nothing holding the two together.
+
+1. ~ bin/tap-audit: + changelog_summaries()
+2. ~ bin/tap-audit: + commit_summaries()
+3. ~ bin/tap-audit: + summary_version()
+4. ~ bin/tap-audit: + unreadable_changelog_finding()
+5. ~ bin/tap-audit: + summary_findings()
+6. ~ bin/tap-audit: ~ findings_for()
+7. ~ test/tap-audit_test.rb
+
+
 ## 20260817
 
 0.5.0: Report something earlier upon the search path answering to the name, which no reading of the tap could find.

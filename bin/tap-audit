@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 # tap-audit
 
-# 20260817
-# 0.5.0
+# 20260821
+# 0.6.0
 
 require 'switches.rb'
 
@@ -200,6 +200,51 @@ def repository_version(name)
   File.read(changelog_path(name))[/^(\d+\.\d+\.\d+):/, 1]
 end
 
+# A version's summary is written once and copied twice: into the CHANGELOG and
+# into the commit which made it.  Nothing holds the two together, so an edit to
+# either leaves the other saying something else, and neither file is wrong on
+# its own.  Eleven of the tap's repositories carried a summary rewritten in one
+# place and not the other.
+def changelog_summaries(name)
+  return [] unless changelog_path(name)
+  File.readlines(changelog_path(name)).collect(&:chomp).grep(/\A\d+\.\d+\.\d+: /)
+end
+
+def commit_summaries(name)
+  git(name, 'log', '--format=%s').lines.collect(&:chomp).grep(/\A\d+\.\d+\.\d+: /)
+end
+
+def summary_version(line)
+  line[/\A(\d+\.\d+\.\d+):/, 1]
+end
+
+# A CHANGELOG stating no summary in the form at all is one file to correct
+# rather than one finding per version: weblink writes the version and date upon
+# one line and the summary upon the next, so every commit there looks orphaned.
+def unreadable_changelog_finding(name)
+  return nil unless changelog_path(name)
+  return nil unless changelog_summaries(name).empty?
+  return nil if commit_summaries(name).empty?
+  'summary: the CHANGELOG states no summary in the form "X.Y.Z: ...", so none can be compared against the commits'
+end
+
+def summary_findings(name)
+  return [] unless changelog_path(name)
+  return [] if changelog_summaries(name).empty?
+  entries = changelog_summaries(name)
+  messages = commit_summaries(name)
+  versions = (entries + messages).collect{|line| summary_version(line)}.uniq.sort_by{|version| Gem::Version.new(version)}
+  versions.filter_map do |version|
+    entry = entries.find{|line| summary_version(line) == version}
+    said = messages.select{|line| summary_version(line) == version}
+    next if said.length == 1 && said.first == entry
+    next "summary: #{version} is the version of #{said.length} commits" if said.length > 1
+    next "summary: #{version} is in the CHANGELOG and no commit says it" if said.empty?
+    next "summary: #{version} is in a commit and not the CHANGELOG" if entry.nil?
+    "summary: #{version}'s commit says #{said.first.inspect} and the CHANGELOG says #{entry.inspect}"
+  end
+end
+
 def version_finding(name, path)
   return nil unless repository_version(name)
   return nil if repository_version(name) == declared_version(path)
@@ -379,7 +424,7 @@ def findings_for(name, path)
   unless commits?(name)
     return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact
   end
-  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), *formula_only].compact
+  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *formula_only].compact
 end
 
 def findings

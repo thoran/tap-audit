@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
-# 20260817
-# 0.3.0
+# 20260821
+# 0.4.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -45,15 +45,22 @@ end
 # A repository with a commit unless one is not wanted, ls-files reporting
 # nothing before the first commit and the directory check then having nothing to
 # miss, which is a state of its own and tested below.
-def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil)
+def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false)
   directory = File.join(root, name)
   files.each{|f| FileUtils.mkdir_p(File.dirname(File.join(directory, f))); FileUtils.touch(File.join(directory, f))}
   write_binary(directory, name, shebang) if shebang
   File.write(File.join(directory, 'CHANGELOG'), "# CHANGELOG\n\n## 20260817\n\n#{changelog}: whatever it was.\n") if changelog
+  File.write(File.join(directory, 'CHANGELOG'), "# CHANGELOG\n\n1.0.0 - 20260821\n\nWhatever it was.\n") if old_changelog
   git(directory, 'init', '--quiet') || (FileUtils.mkdir_p(directory) && git(directory, 'init', '--quiet'))
   return unless commits
   git(directory, 'add', '.')
-  git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', 'in')
+  message = commit_summary == :from_changelog ? (changelog ? "#{changelog}: whatever it was." : 'in') : commit_summary
+  git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', message)
+  extra_commits.each do |summary|
+    File.write(File.join(directory, 'again'), summary)
+    git(directory, 'add', '.')
+    git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', summary)
+  end
   tags.each{|t| git(directory, 'tag', t)}
 end
 
@@ -125,6 +132,67 @@ describe 'the version check' do
       repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], tags: ['v1.0.0']}},
     ) do |output, _status|
       _(output).wont_include 'version:'
+    end
+  end
+end
+
+describe 'the summary check' do
+  it 'says nothing where the commit and the CHANGELOG agree' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include 'summary:'
+    end
+  end
+
+  it 'reports both texts where they differ' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '1.0.0', tags: ['v1.0.0'], commit_summary: '1.0.0: something else entirely.'}},
+    ) do |output, status|
+      _(output).must_include %{summary: 1.0.0's commit says "1.0.0: something else entirely." and the CHANGELOG says "1.0.0: whatever it was."}
+      _(status).must_equal 1
+    end
+  end
+
+  # The commit predating the convention is not the CHANGELOG disagreeing with
+  # it, but it is still a version nothing in the log accounts for.
+  it 'reports a version the CHANGELOG states and no commit says' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '1.0.0', tags: ['v1.0.0'], commit_summary: 'in'}},
+    ) do |output, _status|
+      _(output).must_include 'summary: 1.0.0 is in the CHANGELOG and no commit says it'
+    end
+  end
+
+  # moby's case: two commits carry 0.8.0, so the version names two states and
+  # neither the tag nor the entry says which.
+  it 'reports a version carried by more than one commit' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '1.0.0', tags: ['v1.0.0'], extra_commits: ['1.0.0: whatever it was.']}},
+    ) do |output, _status|
+      _(output).must_include 'summary: 1.0.0 is the version of 2 commits'
+    end
+  end
+
+  # weblink's case: the older form states the version and date upon one line and
+  # the summary upon the next, so nothing matches and every commit looks orphaned.
+  it 'reports the CHANGELOG once where it states no summary in the form' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], tags: ['v1.0.0'], old_changelog: true, commit_summary: '1.0.0: whatever it was.'}},
+    ) do |output, _status|
+      _(output).must_include 'summary: the CHANGELOG states no summary in the form'
+      _(output.scan('summary:').length).must_equal 1
+    end
+  end
+
+  it 'says nothing where there is no CHANGELOG at all' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], tags: ['v1.0.0'], commit_summary: '1.0.0: whatever it was.'}},
+    ) do |output, _status|
+      _(output).wont_include 'summary:'
     end
   end
 end
