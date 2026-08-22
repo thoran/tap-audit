@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## 20260823
+
+0.9.0: Report the pinned tag against the version, a version stated twice, the homepage against the url, and the standard files.
+
+1. ~ bin/tap-audit: + declared_url()
+2. ~ bin/tap-audit: + declared_homepage()
+3. ~ bin/tap-audit: + repository_named()
+4. ~ bin/tap-audit: + pin_version_finding()
+5. ~ bin/tap-audit: + version_file_paths()
+6. ~ bin/tap-audit: + stated_version()
+7. ~ bin/tap-audit: + script_version()
+8. ~ bin/tap-audit: + secondary_version_findings()
+9. ~ bin/tap-audit: + homepage_finding()
+10. ~ bin/tap-audit: + tracked?()
+11. ~ bin/tap-audit: + gitignore_lines()
+12. ~ bin/tap-audit: + standard_file_findings()
+13. ~ bin/tap-audit: + tap_readme()
+14. ~ bin/tap-audit: + installed_names()
+15. ~ bin/tap-audit: + sourced_names()
+16. ~ bin/tap-audit: + readme_findings()
+17. ~ bin/tap-audit: + report_readme()
+18. ~ bin/tap-audit: ~ formula_only_findings()
+19. ~ bin/tap-audit: ~ findings_for()
+20. ~ bin/tap-audit: ~ report_summary()
+21. ~ bin/tap-audit: ~ main()
+22. ~ test/tap-audit_test.rb
+
+
 ## 20260821
 
 0.8.0: Report a tag naming a commit outside the branch released from, the tree deciding which of them matter.

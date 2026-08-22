@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 # tap-audit
 
-# 20260821
-# 0.8.0
+# 20260823
+# 0.9.0
 
 require 'switches.rb'
 
@@ -11,6 +11,7 @@ DEFAULT_BREW_PREFIX = '/opt/homebrew'
 DEFAULT_REPOSITORIES_DIRECTORY = File.expand_path('..')
 DEFAULT_SEARCH_PATH = ENV['PATH'].to_s
 DEFAULT_TAP_DIRECTORY = File.expand_path('.')
+STANDARD_GITIGNORE_LINES = 47
 UNINSTALLED_DIRECTORIES = %w{doc spec test}
 
 def usage
@@ -71,6 +72,18 @@ end
 
 def declared_tag(path)
   formula_source(path)[/^\s*url .*tag: '([^']+)'/, 1]
+end
+
+def declared_url(path)
+  formula_source(path)[/^\s*url '([^']+)'/, 1]
+end
+
+def declared_homepage(path)
+  formula_source(path)[/^\s*homepage '([^']+)'/, 1]
+end
+
+def repository_named(url)
+  url.to_s[%r{github\.com[:/]thoran/([^/]+?)(?:\.git)?/?\z}, 1]
 end
 
 # A formula reaches the keg by more than .install: moby copied its lib in with
@@ -353,6 +366,85 @@ def pin_finding(name, path)
   nil
 end
 
+# The fault pinning introduces, and the one every other check here passes over:
+# a formula whose version and whose tag are each perfectly good and name
+# different releases installs one while calling itself the other, which is the
+# state pinning was adopted to make impossible.
+def pin_version_finding(name, path)
+  return nil unless declared_tag(path)
+  return nil unless tags(name).include?(declared_tag(path))
+  pinned = declared_tag(path)[/\Av?(\d+\.\d+\.\d+)\z/, 1]
+  return nil unless pinned
+  return nil if pinned == declared_version(path)
+  "pin: the formula says #{declared_version(path)} and pins #{declared_tag(path)}"
+end
+
+def version_file_paths(name)
+  git(name, 'ls-files').lines.collect(&:strip).grep(/VERSION\.rb\z/)
+end
+
+def stated_version(name, file)
+  File.read(File.join(repository_path(name), file))[/VERSION\s*=\s*'([^']+)'/, 1]
+end
+
+def script_version(name)
+  script = File.join(repository_path(name), 'bin', name)
+  return nil unless File.exist?(script)
+  File.read(script)[/^# (\d+\.\d+\.\d+)$/, 1]
+end
+
+# A version stated twice is a version which can disagree with itself.  startor's
+# lib/Startor/VERSION.rb, which its gemspec reads, sat at 0.10.0 while the script
+# header read 0.10.2: it was missed by one sweep and then by a substitution which
+# looked for the version that sweep had skipped.  Only the header is obvious, so
+# only the header gets maintained.
+def secondary_version_findings(name, path)
+  stated = version_file_paths(name).collect{|file| [file, stated_version(name, file)]}
+  stated << ["bin/#{name}", script_version(name)] if script_version(name)
+  stated.filter_map do |file, version|
+    next if version.nil? || version == declared_version(path)
+    "version: #{file} says #{version} and the formula says #{declared_version(path)}"
+  end
+end
+
+# Both name the repository, and nothing holds them together.  git-autobisect's
+# homepage named thoran/git-bisect, which does not exist, and should2expect's
+# named thoran/dehashrocketify.
+def homepage_finding(path)
+  homepage = repository_named(declared_homepage(path))
+  url = repository_named(declared_url(path))
+  return nil unless homepage && url
+  return nil if homepage == url
+  "homepage: names #{homepage} and the url names #{url}"
+end
+
+def tracked?(name, file)
+  !git(name, 'ls-files', '--', file).strip.empty?
+end
+
+def gitignore_lines(name)
+  file = File.join(repository_path(name), '.gitignore')
+  File.exist?(file) ? File.readlines(file).length : nil
+end
+
+# The files every repository here is meant to carry, each of which has been
+# missing from one of them: gem-homepage had no .gitignore at all and startor a
+# one-line one, and nineteen of the twenty declared a licence with no LICENSE
+# beneath it.  None of these is found by installing the formula, which is why
+# they went unnoticed for as long as they did.
+def standard_file_findings(name, path)
+  findings = []
+  findings << 'README.md: none' unless tracked?(name, 'README.md')
+  findings << 'README.md: no License section' if tracked?(name, 'README.md') && File.read(File.join(repository_path(name), 'README.md')) !~ /^## Licen[cs]e$/
+  findings << 'LICENSE: none' unless tracked?(name, 'LICENSE')
+  findings << 'CHANGELOG: none' unless changelog_path(name)
+  findings << 'license: the formula declares none' unless formula_source(path) =~ /^\s*license '/
+  lines = gitignore_lines(name)
+  findings << '.gitignore: none' if lines.nil?
+  findings << ".gitignore: #{lines} lines, the template being #{STANDARD_GITIGNORE_LINES}" if lines && lines < STANDARD_GITIGNORE_LINES
+  findings
+end
+
 def installed?(directory, path)
   installed_paths(path).any?{|installed| installed == directory || installed.start_with?("#{directory}/")}
 end
@@ -508,8 +600,40 @@ def shadow_finding(name)
   "#{File.join(shadow, name)} is searched before #{brew_bin}, so it answers to the name and the formula's own copy never runs"
 end
 
+def tap_readme
+  @tap_readme ||= (
+    path = File.join(switches.formulae, 'README.md')
+    File.exist?(path) ? File.read(path) : false
+  )
+end
+
+def installed_names
+  tap_readme.to_s.scan(/^\$ brew install (?:thoran\/tap\/)?([a-z0-9_.-]+)$/).flatten
+end
+
+def sourced_names
+  tap_readme.to_s.scan(/^\[([a-z0-9_.-]+)\]\(https:\/\/github\.com\/thoran\//).flatten
+end
+
+# The tap's own README states the formulae twice, as a line to run and as a link
+# to the source, and a formula added or renamed leaves both saying what the tap
+# no longer holds.  Reported apart from the per-formula findings for the reason
+# the resource check is: naming one formula would be naming the wrong thing,
+# the fault belonging to the README rather than to any formula in it.
+def readme_findings
+  names = formula_paths.collect{|path| formula_name(path)}
+  return [] if names.empty?
+  return ['no README.md in the tap'] unless tap_readme
+  [['the install list', installed_names], ['the sources list', sourced_names]].flat_map do |label, listed|
+    findings = []
+    findings << "#{label} does not name #{(names - listed).join(', ')}" unless (names - listed).empty?
+    findings << "#{label} names #{(listed - names).join(', ')}, which is no formula here" unless (listed - names).empty?
+    findings
+  end
+end
+
 def formula_only_findings(path)
-  [*unrecognised_findings(path), unstaged_resource_finding(path), *unqualified_dependency_findings(path)].compact
+  [*unrecognised_findings(path), unstaged_resource_finding(path), *unqualified_dependency_findings(path), homepage_finding(path)].compact
 end
 
 def findings_for(name, path)
@@ -518,7 +642,7 @@ def findings_for(name, path)
   unless commits?(name)
     return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact
   end
-  [version_finding(name, path), pin_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *untagged_findings(name, path), *orphan_findings(name), *formula_only].compact
+  [version_finding(name, path), *secondary_version_findings(name, path), pin_finding(name, path), pin_version_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *untagged_findings(name, path), *orphan_findings(name), *standard_file_findings(name, path), *formula_only].compact
 end
 
 def findings
@@ -545,14 +669,22 @@ def report_resources
   resource_findings.each{|finding| puts "  #{finding}"}
 end
 
+def report_readme
+  return if readme_findings.empty?
+  puts
+  puts "the tap's own README"
+  readme_findings.each{|finding| puts "  #{finding}"}
+end
+
 def report_summary
-  puts unless findings.empty? && resource_findings.empty?
+  puts unless findings.empty? && resource_findings.empty? && readme_findings.empty?
   puts "#{findings.length} of #{formula_paths.length} formulae have something to answer for, " \
-    "and #{resource_findings.length} #{resource_findings.length == 1 ? 'gem is' : 'gems are'} pinned at more than one version."
+    "#{resource_findings.length} #{resource_findings.length == 1 ? 'gem is' : 'gems are'} pinned at more than one version, " \
+    "and the tap's README has #{readme_findings.length} #{readme_findings.length == 1 ? 'thing' : 'things'} to answer for."
 end
 
 def anything_found?
-  !findings.empty? || !resource_findings.empty?
+  !findings.empty? || !resource_findings.empty? || !readme_findings.empty?
 end
 
 def main
@@ -560,6 +692,7 @@ def main
   validate_directories
   report
   report_resources
+  report_readme
   report_summary
   exit 1 if anything_found?
 end

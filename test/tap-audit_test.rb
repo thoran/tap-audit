@@ -20,12 +20,14 @@ BIN = ENV['TAP_AUDIT'] || File.expand_path('../bin/tap-audit', __dir__)
 
 # A formula with the parts each example varies and defaults for the rest, so
 # that an example states the one thing it is about.
-def formula_source(name, version: '1.0.0', tag: nil, install: nil, resources: {}, depends_on: ['ruby'])
+def formula_source(name, version: '1.0.0', tag: nil, install: nil, resources: {}, depends_on: ['ruby'], homepage: nil, license: 'MIT')
   url = tag ? "url 'https://github.com/thoran/#{name}.git', tag: '#{tag}'" : "url 'https://github.com/thoran/#{name}.git'"
   body = install || "bin.install 'bin/#{name}'"
   declarations = resources.collect{|gem_name, gem_version| resource_source(gem_name, gem_version)}.join
   dependencies = depends_on.collect{|dependency| "  depends_on '#{dependency}'\n"}.join
-  "class #{name.capitalize} < Formula\n  version '#{version}'\n\n  #{url}\n\n#{dependencies}\n#{declarations}  def install\n#{body.lines.collect{|l| '    ' + l}.join}\n  end\nend\n"
+  header = "  homepage 'https://github.com/thoran/#{homepage || name}'\n  version '#{version}'\n"
+  header += "  license '#{license}'\n" if license
+  "class #{name.capitalize} < Formula\n#{header}\n  #{url}\n\n#{dependencies}\n#{declarations}  def install\n#{body.lines.collect{|l| '    ' + l}.join}\n  end\nend\n"
 end
 
 def resource_source(gem_name, gem_version)
@@ -63,10 +65,31 @@ def orphan_by(directory, how)
   end
 end
 
-def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false, orphan: nil, branch: nil)
+# The files every repository is meant to carry, written unless an example is
+# about one of them being absent, so that a fixture states the one thing it
+# varies rather than every standard file over again.
+def write_standard_files(directory, readme: true, licence: true, gitignore: true, readme_body: nil)
+  File.write(File.join(directory, 'README.md'), readme_body || "# thing\n\n## Description\n\nWhatever it does.\n\n\n## License\n\nMIT\n") if readme
+  File.write(File.join(directory, 'LICENSE'), "MIT License\n\nCopyright (c) 2026 thoran\n") if licence
+  lines = gitignore == true ? 47 : gitignore
+  File.write(File.join(directory, '.gitignore'), Array.new(lines){|i| "# line #{i}"}.join("\n") + "\n") if lines
+end
+
+def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false, orphan: nil, branch: nil, standard: {}, readme_body: nil, version_file: nil, header_version: nil)
   directory = File.join(root, name)
+  FileUtils.mkdir_p(directory)
+  write_standard_files(directory, readme_body: readme_body, **standard)
   files.each{|f| FileUtils.mkdir_p(File.dirname(File.join(directory, f))); FileUtils.touch(File.join(directory, f))}
   write_binary(directory, name, shebang) if shebang
+  if version_file
+    path, stated = version_file
+    FileUtils.mkdir_p(File.dirname(File.join(directory, path)))
+    File.write(File.join(directory, path), "class Thing\n  VERSION = '#{stated}'\nend\n")
+  end
+  if header_version
+    FileUtils.mkdir_p(File.join(directory, 'bin'))
+    File.write(File.join(directory, 'bin', name), "#!/usr/bin/env ruby\n# #{name}\n\n# 20260823\n# #{header_version}\n")
+  end
   File.write(File.join(directory, 'CHANGELOG'), "# CHANGELOG\n\n## 20260817\n\n#{changelog}: whatever it was.\n") if changelog
   File.write(File.join(directory, 'CHANGELOG'), "# CHANGELOG\n\n1.0.0 - 20260821\n\nWhatever it was.\n") if old_changelog
   git(directory, 'init', '--quiet') || (FileUtils.mkdir_p(directory) && git(directory, 'init', '--quiet'))
@@ -97,12 +120,22 @@ def commitless(version: '1.0.0', files: ['bin/thing', 'lib/Thing.rb'])
   }
 end
 
-def in_fixture(formulae: {}, repositories: {}, arguments: [])
+# The tap's own README states its formulae twice, as a line to run and as a link
+# to the source, and the check reads both.  Written to agree unless an example
+# gives it something else to say.
+def write_tap_readme(tap, names, installed: nil, sourced: nil)
+  installs = (installed || names).collect{|name| "$ brew install #{name}"}.join("\n")
+  sources = (sourced || names).collect{|name| "[#{name}](https://github.com/thoran/#{name})"}.join(",\n")
+  File.write(File.join(tap, 'README.md'), "# homebrew-tap\n\n## Usage\n\n```shell\n#{installs}\n```\n\n## Sources\n\n#{sources}\n")
+end
+
+def in_fixture(formulae: {}, repositories: {}, arguments: [], tap_readme: nil)
   Dir.mktmpdir do |root|
     tap = File.join(root, 'tap')
     repositories_directory = File.join(root, 'repositories')
     FileUtils.mkdir_p([tap, repositories_directory])
     formulae.each{|name, source| File.write(File.join(tap, "#{name}.rb"), source)}
+    tap_readme ? write_tap_readme(tap, formulae.keys, **tap_readme) : write_tap_readme(tap, formulae.keys)
     repositories.each{|name, options| make_repository(repositories_directory, name, **options)}
     stdout, stderr, status = Open3.capture3(BIN, '--formulae', tap, '--repositories', repositories_directory, '--search-path', '', *arguments)
     yield stdout + stderr, status.exitstatus
@@ -366,6 +399,196 @@ describe 'the orphan check' do
       arguments: ['--branch', 'main'],
     ) do |output, _status|
       _(output).wont_include 'orphan:'
+    end
+  end
+end
+
+# Pinning closes one hole and opens another: a version and a tag which are each
+# perfectly good and name different releases.  Nothing else here compares them,
+# every other check being satisfied by each alone.
+describe 'the pinned version check' do
+  it 'says nothing where the tag is the version' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include 'pin:'
+    end
+  end
+
+  it 'reports a formula which pins a release other than the one it names' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', version: '1.0.1', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.1', tags: ['v1.0.0', 'v1.0.1']}},
+    ) do |output, status|
+      _(output).must_include 'pin: the formula says 1.0.1 and pins v1.0.0'
+      _(status).must_equal 1
+    end
+  end
+
+  # A tag which states no version cannot disagree with one.
+  it 'says nothing of a tag which is not a version' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'release', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['release']}},
+    ) do |output, _status|
+      _(output).wont_include 'pin:'
+    end
+  end
+end
+
+# A version stated in one place is maintained; a version stated twice is a
+# version which can disagree with itself, and the second place is the one nobody
+# looks at.
+describe 'the secondary version check' do
+  def with_version_file(stated)
+    {
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing/VERSION.rb'], changelog: '1.0.0', tags: ['v1.0.0'], version_file: ['lib/Thing/VERSION.rb', stated]}},
+    }
+  end
+
+  it 'says nothing where every place states the same version' do
+    in_fixture(**with_version_file('1.0.0')) do |output, _status|
+      _(output).wont_match(/version: lib/)
+    end
+  end
+
+  it 'reports a VERSION.rb which has been left behind' do
+    in_fixture(**with_version_file('0.9.0')) do |output, status|
+      _(output).must_include 'version: lib/Thing/VERSION.rb says 0.9.0 and the formula says 1.0.0'
+      _(status).must_equal 1
+    end
+  end
+
+  it 'reports a script header which has been left behind' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], header_version: '0.9.0'}},
+    ) do |output, _status|
+      _(output).must_include 'version: bin/thing says 0.9.0 and the formula says 1.0.0'
+    end
+  end
+end
+
+# Two fields naming the same repository, with nothing holding them together.
+describe 'the homepage check' do
+  it 'says nothing where the homepage and the url name one repository' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include 'homepage:'
+    end
+  end
+
+  it 'reports a homepage naming another repository' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', homepage: 'something-else', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0']}},
+    ) do |output, status|
+      _(output).must_include 'homepage: names something-else and the url names thing'
+      _(status).must_equal 1
+    end
+  end
+end
+
+# None of these is found by installing the formula, which is why they went
+# unnoticed for as long as they did.
+describe 'the standard files check' do
+  def without(**standard)
+    {
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], standard: standard}},
+    }
+  end
+
+  it 'says nothing where every standard file is there' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, status|
+      _(output).wont_match(/README\.md:|LICENSE:|CHANGELOG:|\.gitignore:|license:/)
+      _(status).must_equal 0
+    end
+  end
+
+  it 'reports a repository with no README' do
+    in_fixture(**without(readme: false)) do |output, _status|
+      _(output).must_include 'README.md: none'
+    end
+  end
+
+  it 'reports a README which names no licence' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], readme_body: "# thing\n\nWhatever it does.\n"}},
+    ) do |output, _status|
+      _(output).must_include 'README.md: no License section'
+    end
+  end
+
+  it 'reports a repository with no LICENSE' do
+    in_fixture(**without(licence: false)) do |output, _status|
+      _(output).must_include 'LICENSE: none'
+    end
+  end
+
+  it 'reports a repository with no CHANGELOG' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], tags: ['v1.0.0']}},
+    ) do |output, _status|
+      _(output).must_include 'CHANGELOG: none'
+    end
+  end
+
+  it 'reports a formula declaring no licence' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', license: nil, install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0']}},
+    ) do |output, _status|
+      _(output).must_include 'license: the formula declares none'
+    end
+  end
+
+  it 'reports a .gitignore short of the template, startor having carried a one-line one' do
+    in_fixture(**without(gitignore: 1)) do |output, _status|
+      _(output).must_include '.gitignore: 1 lines, the template being 47'
+    end
+  end
+
+  it 'reports a repository with no .gitignore at all, as gem-homepage had' do
+    in_fixture(**without(gitignore: false)) do |output, _status|
+      _(output).must_include '.gitignore: none'
+    end
+  end
+end
+
+# The tap states its formulae twice over, and a formula added or renamed leaves
+# both lists saying what the tap no longer holds.
+describe "the tap's own README" do
+  it 'says nothing where both lists name every formula' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, _status|
+      _(output).wont_include "the tap's own README"
+    end
+  end
+
+  it 'reports a formula the install list does not name' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'"), tap_readme: {installed: []}) do |output, status|
+      _(output).must_include 'the install list does not name thing'
+      _(status).must_equal 1
+    end
+  end
+
+  it 'reports a formula the sources list does not name' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'"), tap_readme: {sourced: []}) do |output, _status|
+      _(output).must_include 'the sources list does not name thing'
+    end
+  end
+
+  it 'reports a name listed which is no formula, a formula renamed leaving the old name behind' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'"), tap_readme: {installed: ['thing', 'gone']}) do |output, _status|
+      _(output).must_include 'the install list names gone, which is no formula here'
+    end
+  end
+
+  it 'says nothing of a tap holding no formulae, there being nothing for a README to name' do
+    Dir.mktmpdir do |root|
+      output, status = audit('--formulae', root, '--repositories', root)
+      _(output).wont_include "the tap's own README"
+      _(status).must_equal 0
     end
   end
 end
@@ -717,6 +940,7 @@ describe 'a copy which shadows the formula' do
       ahead.each{|n| FileUtils.touch(File.join(early, n))}
       behind.each{|n| FileUtils.touch(File.join(brew_bin, n))}
       File.write(File.join(tap, 'thing.rb'), formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'"))
+      write_tap_readme(tap, ['thing'])
       make_repository(repositories, 'thing', files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'])
       search = brew_on_path ? [early, brew_bin, late] : [early, late]
       yield(*audit('--formulae', tap, '--repositories', repositories,
