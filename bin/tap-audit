@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20260823
-# 0.10.0
+# 0.11.0
 
 require 'switches.rb'
 
@@ -251,6 +251,39 @@ def unreadable_changelog_finding(name)
   'summary: the CHANGELOG states no summary in the form "X.Y.Z: ...", so none can be compared against the commits'
 end
 
+def entry_written(name, version)
+  git(name, 'log', '--format=%h %ad', '--date=short', '--reverse', '-S', "#{version}: ", '--', File.basename(changelog_path(name))).lines.first.to_s.split
+end
+
+def summary_written(name, version)
+  line = git(name, 'log', '--format=%h %ad %s', '--date=short').lines.find do |entry|
+    entry.split(' ', 3).last.to_s.start_with?("#{version}: ")
+  end
+  line.to_s.split(' ', 3).first(2)
+end
+
+# Which text came first, and whether both were written at once.  A release which
+# recorded itself inconsistently is a different fault from a record reconstructed
+# afterwards which disagrees with a contemporary one, and the dates are the only
+# thing here which tells the two apart.
+#
+# Neither settles which text is right, and the tool does not say: moby's
+# CHANGELOG is the better record and gem-publish's commit is, and in both the
+# commit came first by a long way.  What is reported is when each was written.
+#
+# A line apiece, oldest first, rather than both upon one: the two texts are what
+# is being compared, and moby's run to two hundred characters before the dates
+# are added to them.
+def summary_disagreement(name, version, said, entry)
+  written = summary_written(name, version)
+  written_entry = entry_written(name, version)
+  lines = [['commit', said, written], ['CHANGELOG', entry, written_entry]]
+  return "summary: #{version} disagrees\n    commit     #{said.inspect}\n    CHANGELOG  #{entry.inspect}" if written.empty? || written_entry.empty?
+  header = written.first == written_entry.first ? "summary: #{version} disagrees, both written in #{written.first}" : "summary: #{version} disagrees, oldest first"
+  body = lines.sort_by{|_label, _text, at| at.last.to_s}.collect{|label, text, at| "    #{at.last}  #{label.ljust(9)}  #{text.inspect}"}
+  ([header] + body).join("\n")
+end
+
 def summary_findings(name)
   return [] unless changelog_path(name)
   return [] if changelog_summaries(name).empty?
@@ -264,7 +297,7 @@ def summary_findings(name)
     next "summary: #{version} is the version of #{said.length} commits" if said.length > 1
     next "summary: #{version} is in the CHANGELOG and no commit says it" if said.empty?
     next "summary: #{version} is in a commit and not the CHANGELOG" if entry.nil?
-    "summary: #{version}'s commit says #{said.first.inspect} and the CHANGELOG says #{entry.inspect}"
+    summary_disagreement(name, version, said.first, entry)
   end
 end
 

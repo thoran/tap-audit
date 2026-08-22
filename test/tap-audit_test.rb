@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
 # 20260823
-# 0.7.0
+# 0.8.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -75,7 +75,7 @@ def write_standard_files(directory, readme: true, licence: true, gitignore: true
   File.write(File.join(directory, '.gitignore'), Array.new(lines){|i| "# line #{i}"}.join("\n") + "\n") if lines
 end
 
-def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false, orphan: nil, branch: nil, standard: {}, readme_body: nil, version_file: nil, header_version: nil)
+def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false, orphan: nil, branch: nil, standard: {}, readme_body: nil, version_file: nil, header_version: nil, dated: nil, changelog_later: nil)
   directory = File.join(root, name)
   FileUtils.mkdir_p(directory)
   write_standard_files(directory, readme_body: readme_body, **standard)
@@ -96,7 +96,15 @@ def make_repository(root, name, files: [], changelog: nil, tags: [], commits: tr
   return unless commits
   git(directory, 'add', '.')
   message = commit_summary == :from_changelog ? (changelog ? "#{changelog}: whatever it was." : 'in') : commit_summary
-  git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', message)
+  dating = dated ? ['--date', dated] : []
+  git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', *dating, '-m', message)
+  # The CHANGELOG written after the commit it describes, which is what a
+  # backfilled record is: moby's entries are of 2026 and its commits of 2024.
+  if changelog_later
+    File.write(File.join(directory, 'CHANGELOG'), "# CHANGELOG\n\n## 20260817\n\n#{changelog_later}: whatever it was.\n")
+    git(directory, 'add', '.')
+    git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', '+ CHANGELOG')
+  end
   extra_commits.each do |summary|
     File.write(File.join(directory, 'again'), summary)
     git(directory, 'add', '.')
@@ -196,13 +204,38 @@ describe 'the summary check' do
     end
   end
 
-  it 'reports both texts where they differ' do
+  it 'reports both texts where they differ, a line apiece' do
     in_fixture(
       formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
       repositories: {'thing' => {files: ['bin/thing'], changelog: '1.0.0', tags: ['v1.0.0'], commit_summary: '1.0.0: something else entirely.'}},
     ) do |output, status|
-      _(output).must_include %{summary: 1.0.0's commit says "1.0.0: something else entirely." and the CHANGELOG says "1.0.0: whatever it was."}
+      _(output).must_include %{commit     "1.0.0: something else entirely."}
+      _(output).must_include %{CHANGELOG  "1.0.0: whatever it was."}
       _(status).must_equal 1
+    end
+  end
+
+  # A release which recorded itself inconsistently, both texts having been
+  # written at once, which is a different fault from the one below.
+  it 'says where both were written in one commit' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], changelog: '1.0.0', tags: ['v1.0.0'], commit_summary: '1.0.0: something else entirely.'}},
+    ) do |output, _status|
+      _(output).must_match(/summary: 1\.0\.0 disagrees, both written in \h+/)
+    end
+  end
+
+  # moby's case: the commits are of 2024 and the entries were reconstructed in
+  # 2026, so the record disagreeing with the log was written two years after it.
+  it 'orders them oldest first where the CHANGELOG was written later' do
+    in_fixture(
+      formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
+      repositories: {'thing' => {files: ['bin/thing'], tags: ['v1.0.0'], commit_summary: '1.0.0: something else entirely.', dated: '2024-06-05', changelog_later: '1.0.0'}},
+    ) do |output, _status|
+      _(output).must_include 'summary: 1.0.0 disagrees, oldest first'
+      _(output).must_include %{2024-06-05  commit     "1.0.0: something else entirely."}
+      _(output).must_match(/\d{4}-\d{2}-\d{2}  CHANGELOG  "1\.0\.0: whatever it was\."/)
     end
   end
 

@@ -2,6 +2,15 @@
 
 ## 20260823
 
+0.11.0: Report when each of a version's two summaries was written, and a line apiece.
+
+1. ~ bin/tap-audit: + entry_written()
+2. ~ bin/tap-audit: + summary_written()
+3. ~ bin/tap-audit: + summary_disagreement()
+4. ~ bin/tap-audit: ~ summary_findings()
+5. ~ test/tap-audit_test.rb
+
+
 0.10.0: Ask origin what a pinned build would fetch, no reading of a clone being able to answer it.
 
 1. ~ bin/tap-audit: + ancestor?()
