@@ -2,6 +2,15 @@
 
 ## 20260823
 
+0.12.0: + README.md, TODO.txt, ROADMAP.md and LICENSE, the documents a repository carries.
+
+1. ~ bin/tap-audit (+1 lines, -1 lines)
+2. + LICENSE
+3. + README.md
+4. + ROADMAP.md
+5. + TODO.txt
+
+
 0.11.0: Report when each of a version's two summaries was written, and a line apiece.
 
 1. ~ bin/tap-audit: + entry_written()

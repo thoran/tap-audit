@@ -1,0 +1,9 @@
+# TODO.txt
+
+1. Check that a script's requires resolve from what the formula installs. exitor shipped a script requiring http.rb, sys/proctable and SimpleCSV while its install was `bin.install 'bin/exitor'` and nothing else, so a clean install died at the first require; weblink shipped one whose own require_gem shells out to `gem install` at runtime. Both installed cleanly and both were broken. Waits upon audit_requires and vendor_requires being one tool: run per repository with default arguments, audit_requires asks what the repository declares, which for a tap tool is nothing, and reports every vendored gem as undeclared — three false findings on 20260823 and no true ones.
+2. Report which vendored files nothing reaches, and which have drifted from the tree they were copied from. 28 in startor and 22 in mercurial reached nothing; startor's MacOS/IfConfig.rb had drifted and was raising. Waits upon the same combination, and upon loading each script's requires in a subprocess.
+3. Move secondary_version_findings to the intrinsic side. It compares VERSION.rb and the script header against the formula's version, where the repository already states its version in two places of its own: startor's VERSION.rb at 0.10.0 against a header reading 0.10.2 needed no formula to be seen.
+4. A pre-push hook, or something else which runs this without being asked. There are no hooks and no workflows in the tap or in any of the twenty, so every run to date has been by hand.
+5. A way to be told that a repository is exempt. A fork carries its upstream's tags, which orphan_findings reports every run: rpm has 87.
+6. A way to be told that pinning is not yet policy, or accept that pin_finding fires for every unpinned formula until each names a tag.
+7. Take the release branch per repository rather than one for all of them. --branch is a single name, so a repository releasing from something else is either told separately or misreported.
