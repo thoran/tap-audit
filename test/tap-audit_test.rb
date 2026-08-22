@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
-# 20260822
-# 0.6.0
+# 20260823
+# 0.7.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -589,6 +589,84 @@ describe "the tap's own README" do
       output, status = audit('--formulae', root, '--repositories', root)
       _(output).wont_include "the tap's own README"
       _(status).must_equal 0
+    end
+  end
+end
+
+# A pinned url is fetched from origin, so origin is the only place the question
+# can be asked.  Everything else here reads the clone, which can be in perfect
+# order while origin serves something else — the state fifty-eight tags across
+# eight repositories were in on 20260822, none of them visible from a clone.
+describe 'the origin check' do
+  # A bare repository beside the working one, pushed to and then interfered with,
+  # so that origin and the clone can be made to disagree in each of the ways they
+  # have actually disagreed.
+  def with_origin(spoil: nil, arguments: ['--origin'])
+    Dir.mktmpdir do |root|
+      tap = File.join(root, 'tap')
+      repositories = File.join(root, 'repositories')
+      FileUtils.mkdir_p([tap, repositories])
+      File.write(File.join(tap, 'thing.rb'), formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'"))
+      write_tap_readme(tap, ['thing'])
+      make_repository(repositories, 'thing', files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'])
+      directory = File.join(repositories, 'thing')
+      origin = File.join(root, 'origin.git')
+      git(directory, 'init', '--bare', '--quiet', origin)
+      git(directory, 'remote', 'add', 'origin', origin)
+      git(directory, 'push', '--quiet', 'origin', 'master', 'v1.0.0') unless spoil == :untagged
+      git(directory, 'push', '--quiet', 'origin', 'master') if spoil == :untagged
+      spoil_origin(directory, origin, spoil)
+      yield(*audit('--formulae', tap, '--repositories', repositories, '--search-path', '', *arguments))
+    end
+  end
+
+  # :moved   the clone retags and does not push, which every tag -f leaves behind
+  # :orphan  the branch is rewritten and force-pushed, the tag left where it was
+  def spoil_origin(directory, _origin, spoil)
+    case spoil
+    when :moved
+      File.write(File.join(directory, 'again'), 'x')
+      git(directory, 'add', '.')
+      git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '-m', '1.0.0: whatever it was.')
+      git(directory, 'tag', '--force', 'v1.0.0')
+    when :orphan
+      File.write(File.join(directory, 'again'), 'x')
+      git(directory, 'add', '.')
+      git(directory, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '--amend', '-m', '1.0.0: whatever it was.')
+      git(directory, 'push', '--quiet', '--force', 'origin', 'master')
+    end
+  end
+
+  it 'says nothing where origin serves the release the pin names' do
+    with_origin do |output, _status|
+      _(output).wont_include 'origin:'
+    end
+  end
+
+  it 'is not asked for unless it is asked for, being the one thing here which touches the network' do
+    with_origin(spoil: :untagged, arguments: []) do |output, _status|
+      _(output).wont_include 'origin:'
+    end
+  end
+
+  it 'reports a pin which origin has never heard of' do
+    with_origin(spoil: :untagged) do |output, status|
+      _(output).must_include 'origin: has no v1.0.0, so the pin resolves in this clone and nowhere else'
+      _(status).must_equal 1
+    end
+  end
+
+  it 'reports a tag which origin and the clone disagree about, a retag not pushed leaving exactly this' do
+    with_origin(spoil: :moved) do |output, status|
+      _(output).must_match(/origin: v1\.0\.0 names \h+ and this clone's names \h+/)
+      _(status).must_equal 1
+    end
+  end
+
+  it 'reports a tag outside the branch origin releases from, which is what a pinned build fetches' do
+    with_origin(spoil: :orphan) do |output, status|
+      _(output).must_include 'origin: v1.0.0 names a commit outside master there'
+      _(status).must_equal 1
     end
   end
 end

@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20260823
-# 0.9.0
+# 0.10.0
 
 require 'switches.rb'
 
@@ -25,6 +25,7 @@ def usage
   puts "  -s, --search-path PATH  Colon-separated directories, searched in order (default: $PATH)"
   puts "  -b, --brew-prefix DIR   Where Homebrew keeps bin (default: #{DEFAULT_BREW_PREFIX})"
   puts "  -B, --branch NAME       The branch each repository releases from (default: #{DEFAULT_BRANCH})"
+  puts "  -o, --origin            Ask origin what a pinned build would fetch (one call each)"
   puts "  -h, --help              Show this help"
   puts
   puts "Exits 1 where anything was found, so it can gate a release."
@@ -37,6 +38,7 @@ def switches
     s.optional(:s, :search_path, default: DEFAULT_SEARCH_PATH){'Colon-separated directories, searched in order'}
     s.optional(:b, :brew_prefix, default: DEFAULT_BREW_PREFIX){'Where Homebrew keeps bin'}
     s.optional(:B, :branch, default: DEFAULT_BRANCH){'The branch each repository releases from'}
+    s.boolean(:o, :origin){'Ask origin what a pinned build would fetch'}
     s.perform(:h, :help?) do
       usage
       exit
@@ -310,7 +312,67 @@ def branch?(name)
 end
 
 def reachable?(name, commit)
-  git?(name, 'merge-base', '--is-ancestor', commit, "refs/heads/#{switches.branch}")
+  ancestor?(name, commit, "refs/heads/#{switches.branch}")
+end
+
+def ancestor?(name, commit, of)
+  git?(name, 'merge-base', '--is-ancestor', commit, of)
+end
+
+def object?(name, sha)
+  git?(name, 'cat-file', '-e', "#{sha}^{commit}")
+end
+
+# One call per repository, this being the only thing here which touches the
+# network, and the reason the check is asked for rather than assumed.
+def remote_refs(name)
+  @remote_refs ||= {}
+  @remote_refs[name] ||= git(name, 'ls-remote', '--tags', '--heads', 'origin').lines.each_with_object({}) do |line, refs|
+    sha, ref = line.split(/\s+/, 2)
+    refs[ref.to_s.strip] = sha if sha && ref
+  end
+end
+
+# The peeled line where there is one, an annotated tag naming a tag object and
+# the commit being what a build checks out.  ls-remote answers it only where the
+# pattern admits it, which is why nothing here queries a refname exactly.
+def remote_tag_commit(name, tag)
+  remote_refs(name)["refs/tags/#{tag}^{}"] || remote_refs(name)["refs/tags/#{tag}"]
+end
+
+def remote_branch_commit(name)
+  remote_refs(name)["refs/heads/#{switches.branch}"]
+end
+
+def local_tag_commit(name, tag)
+  git(name, 'rev-parse', "#{tag}^{commit}").strip
+end
+
+# A pinned url is fetched from origin, so origin is where the pin either resolves
+# to the release it names or does not.  Everything else here reads this clone,
+# which can be perfectly in order while origin serves something else: on 20260822
+# fifty-eight tags across eight repositories named commits abandoned by a rewrite
+# whose branch had been force-pushed and whose tags had not, and no check upon a
+# clone could have seen one of them.
+def remote_findings(name, path)
+  return [] unless switches.origin?
+  tag = declared_tag(path)
+  return [] unless tag
+  return ["origin: nothing answered, so what a pinned build would fetch is unknown"] if remote_refs(name).empty?
+  remote = remote_tag_commit(name, tag)
+  return ["origin: has no #{tag}, so the pin resolves in this clone and nowhere else"] unless remote
+  findings = []
+  local = local_tag_commit(name, tag)
+  findings << "origin: #{tag} names #{remote[0, 7]} and this clone's names #{local[0, 7]}, so a build fetches something other than what is here" unless remote == local
+  head = remote_branch_commit(name)
+  if head.nil?
+    findings << "origin: has no #{switches.branch}, so the pin cannot be told from what it releases from"
+  elsif !object?(name, remote) || !object?(name, head)
+    findings << "origin: #{tag} or #{switches.branch} is absent from this clone, so whether the pin sits upon that branch cannot be told without fetching"
+  elsif !ancestor?(name, remote, head)
+    findings << "origin: #{tag} names a commit outside #{switches.branch} there, which is what a pinned build fetches"
+  end
+  findings
 end
 
 def tree(name, revision)
@@ -642,7 +704,7 @@ def findings_for(name, path)
   unless commits?(name)
     return ['the repository has no commits, so what it tracks and what it tags cannot be read', version_finding(name, path), *formula_only].compact
   end
-  [version_finding(name, path), *secondary_version_findings(name, path), pin_finding(name, path), pin_version_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *untagged_findings(name, path), *orphan_findings(name), *standard_file_findings(name, path), *formula_only].compact
+  [version_finding(name, path), *secondary_version_findings(name, path), pin_finding(name, path), pin_version_finding(name, path), *directory_findings(name, path), interpreter_finding(name, path), unreadable_changelog_finding(name), *summary_findings(name), *untagged_findings(name, path), *orphan_findings(name), *remote_findings(name, path), *standard_file_findings(name, path), *formula_only].compact
 end
 
 def findings
