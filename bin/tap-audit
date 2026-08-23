@@ -1,12 +1,14 @@
 #!/usr/bin/env ruby
 # tap-audit
 
-# 20260823
-# 0.12.0
+# 20260824
+# 0.13.0
 
+require 'json'
 require 'switches.rb'
 
 DEFAULT_BRANCH = 'master'
+DEFAULT_CONFIG_FILEPATH = File.join('~', '.config', 'tap-audit', 'config.json')
 DEFAULT_BREW_PREFIX = '/opt/homebrew'
 DEFAULT_REPOSITORIES_DIRECTORY = File.expand_path('..')
 DEFAULT_SEARCH_PATH = ENV['PATH'].to_s
@@ -20,8 +22,9 @@ def usage
   puts "Usage: tap-audit [options]"
   puts
   puts "Options:"
-  puts "  -r, --repositories DIR  Where the source repositories are (default: #{DEFAULT_REPOSITORIES_DIRECTORY})"
-  puts "  -f, --formulae DIR      Where the formulae are (default: #{DEFAULT_TAP_DIRECTORY})"
+  puts "  -c, --config FILE       Where the configuration is (default: #{DEFAULT_CONFIG_FILEPATH})"
+  puts "  -r, --repositories DIR  Where the source repositories are (default: the configured one, else ..)"
+  puts "  -f, --formulae DIR      Where the formulae are (default: the configured one, else .)"
   puts "  -s, --search-path PATH  Colon-separated directories, searched in order (default: $PATH)"
   puts "  -b, --brew-prefix DIR   Where Homebrew keeps bin (default: #{DEFAULT_BREW_PREFIX})"
   puts "  -B, --branch NAME       The branch each repository releases from (default: #{DEFAULT_BRANCH})"
@@ -33,8 +36,9 @@ end
 
 def switches
   @switches ||= Switches.new do |s|
-    s.optional(:r, :repositories, default: DEFAULT_REPOSITORIES_DIRECTORY){'Where the source repositories are'}
-    s.optional(:f, :formulae, default: DEFAULT_TAP_DIRECTORY){'Where the formulae are'}
+    s.optional(:c, :config){'Where the configuration is'}
+    s.optional(:r, :repositories){'Where the source repositories are'}
+    s.optional(:f, :formulae){'Where the formulae are'}
     s.optional(:s, :search_path, default: DEFAULT_SEARCH_PATH){'Colon-separated directories, searched in order'}
     s.optional(:b, :brew_prefix, default: DEFAULT_BREW_PREFIX){'Where Homebrew keeps bin'}
     s.optional(:B, :branch, default: DEFAULT_BRANCH){'The branch each repository releases from'}
@@ -46,8 +50,34 @@ def switches
   end
 end
 
+def config_filepath
+  File.expand_path(switches.config || DEFAULT_CONFIG_FILEPATH)
+end
+
+# Absent is legitimate rather than an error: a tap is a repository, so tap-audit
+# run from within one needs no configuration at all, and what it installs from
+# sits beside it.  A configuration is how a tap kept somewhere else is said once
+# rather than upon every run.
+def config
+  @config ||= (
+    if File.exist?(config_filepath)
+      JSON.parse(File.read(config_filepath), symbolize_names: true)
+    else
+      {}
+    end
+  )
+end
+
+def repositories_directory
+  @repositories_directory ||= File.expand_path(switches.repositories || config[:repositories] || DEFAULT_REPOSITORIES_DIRECTORY)
+end
+
+def formulae_directory
+  @formulae_directory ||= File.expand_path(switches.formulae || config[:formulae] || DEFAULT_TAP_DIRECTORY)
+end
+
 def validate_directories
-  [switches.repositories, switches.formulae].each do |directory|
+  [repositories_directory, formulae_directory].each do |directory|
     unless Dir.exist?(directory)
       $stderr.puts "No such directory: #{directory}"
       exit 1
@@ -56,7 +86,7 @@ def validate_directories
 end
 
 def formula_paths
-  @formula_paths ||= Dir[File.join(switches.formulae, '*.rb')].sort
+  @formula_paths ||= Dir[File.join(formulae_directory, '*.rb')].sort
 end
 
 def formula_name(path)
@@ -186,7 +216,7 @@ def installed_paths(path)
 end
 
 def repository_path(name)
-  File.join(switches.repositories, name)
+  File.join(repositories_directory, name)
 end
 
 def repository?(name)
@@ -697,7 +727,7 @@ end
 
 def tap_readme
   @tap_readme ||= (
-    path = File.join(switches.formulae, 'README.md')
+    path = File.join(formulae_directory, 'README.md')
     File.exist?(path) ? File.read(path) : false
   )
 end

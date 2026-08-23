@@ -32,6 +32,7 @@ $ tap-audit --formulae ~/homebrew-tap --repositories ~/code
 
 | Option | Takes | What it does |
 | --- | --- | --- |
+| `-c`, `--config` | file | Where the configuration is, `~/.config/tap-audit/config.json` by default |
 | `-r`, `--repositories` | directory | Where the source repositories are |
 | `-f`, `--formulae` | directory | Where the formulae are |
 | `-s`, `--search-path` | colon-separated directories | Searched in order, `$PATH` by default |
@@ -41,6 +42,22 @@ $ tap-audit --formulae ~/homebrew-tap --repositories ~/code
 | `-h`, `--help` | — | Show the help |
 
 Everything but `--origin` reads the disc, so a run is quick and offline. `--origin` is asked for rather than assumed because it is the only part which touches the network.
+
+
+## Configuration
+
+A tap is a repository, so with no configuration at all `tap-audit` is run from within one and reads what it installs from beside it — `.` for the formulae and `..` for the repositories.
+
+Where they sit elsewhere, say so once rather than upon every run:
+
+```json
+{
+  "repositories": "~/code/repositories",
+  "formulae": "~/code/repositories/homebrew-tap"
+}
+```
+
+in `~/.config/tap-audit/config.json`, or wherever `--config` names. A switch overrides the configuration, the configuration overrides the default, and a missing file is no error.
 
 
 ## The checks

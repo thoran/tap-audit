@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## 20260824
+
+0.13.0: Take the two directories from a configuration, a switch overriding it and a relative default beneath.
+
+1. ~ bin/tap-audit: + require 'json'
+2. ~ bin/tap-audit: + config_filepath()
+3. ~ bin/tap-audit: + config()
+4. ~ bin/tap-audit: + repositories_directory()
+5. ~ bin/tap-audit: + formulae_directory()
+6. ~ bin/tap-audit: ~ usage()
+7. ~ bin/tap-audit: ~ switches()
+8. ~ bin/tap-audit: ~ validate_directories()
+9. ~ bin/tap-audit: ~ formula_paths()
+10. ~ bin/tap-audit: ~ repository_path()
+11. ~ bin/tap-audit: ~ tap_readme()
+12. ~ README.md
+
+
 ## 20260823
 
 0.12.0: + README.md, TODO.txt, ROADMAP.md and LICENSE, the documents a repository carries.
