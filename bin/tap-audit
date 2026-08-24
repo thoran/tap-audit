@@ -2,7 +2,9 @@
 # tap-audit
 
 # 20260824
-# 0.14.0
+# 0.14.1
+
+gem 'switches.rb'
 
 require 'json'
 require 'switches.rb'
