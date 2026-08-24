@@ -39,9 +39,12 @@ def git(directory, *arguments)
 end
 
 # bin/<name> with a first line, the interpreter check reading no further.
-def write_binary(directory, name, shebang)
+# requires: is what the program asks for itself, which is what tells a gem two
+# formulae reach directly from one which only a single formula reaches.
+def write_binary(directory, name, shebang, requires: [])
   FileUtils.mkdir_p(File.join(directory, 'bin'))
-  File.write(File.join(directory, 'bin', name), "#{shebang}\n# #{name}\n")
+  body = requires.collect{|required| "require '#{required}'\n"}.join
+  File.write(File.join(directory, 'bin', name), "#{shebang}\n# #{name}\n#{body}")
 end
 
 # A repository with a commit unless one is not wanted, ls-files reporting
@@ -75,12 +78,12 @@ def write_standard_files(directory, readme: true, licence: true, gitignore: true
   File.write(File.join(directory, '.gitignore'), Array.new(lines){|i| "# line #{i}"}.join("\n") + "\n") if lines
 end
 
-def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false, orphan: nil, branch: nil, standard: {}, readme_body: nil, version_file: nil, header_version: nil, dated: nil, changelog_later: nil)
+def make_repository(root, name, files: [], changelog: nil, tags: [], commits: true, shebang: nil, commit_summary: :from_changelog, extra_commits: [], old_changelog: false, orphan: nil, branch: nil, standard: {}, readme_body: nil, version_file: nil, header_version: nil, dated: nil, changelog_later: nil, requires: [])
   directory = File.join(root, name)
   FileUtils.mkdir_p(directory)
   write_standard_files(directory, readme_body: readme_body, **standard)
   files.each{|f| FileUtils.mkdir_p(File.dirname(File.join(directory, f))); FileUtils.touch(File.join(directory, f))}
-  write_binary(directory, name, shebang) if shebang
+  write_binary(directory, name, shebang, requires: requires) if shebang || !requires.empty?
   if version_file
     path, stated = version_file
     FileUtils.mkdir_p(File.dirname(File.join(directory, path)))
@@ -814,20 +817,56 @@ describe 'the same gem at more than one version' do
     end
   end
 
-  it 'names the versions and the formulae holding them' do
+  it 'names the versions and the formulae holding them, where both reach the gem directly' do
     in_fixture(
       formulae: {
         'thing' => formula_source('thing', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.10.3'}),
         'other' => formula_source('other', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.9.15'}),
       },
       repositories: {
-        'thing' => {files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0']},
-        'other' => {files: ['bin/other', 'lib/Other.rb'], changelog: '1.0.0', tags: ['v1.0.0']},
+        'thing' => {files: ['lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], requires: ['switches.rb']},
+        'other' => {files: ['lib/Other.rb'], changelog: '1.0.0', tags: ['v1.0.0'], requires: ['switches.rb']},
       },
     ) do |output, status|
       _(output).must_include 'the same gem at more than one version'
       _(output).must_include 'switches.rb: 0.10.3 in thing; 0.9.15 in other'
       _(status).must_equal 1
+    end
+  end
+
+  # git-boot names activesupport 8.1.3.1 because sym wants it, and
+  # git-checkout-new-issue names 7.0.7.2 because it requires active_support
+  # itself.  Separate kegs, separate load paths, no disagreement to settle.
+  it 'says nothing where only one of the two reaches the gem directly' do
+    in_fixture(
+      formulae: {
+        'thing' => formula_source('thing', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.10.3'}),
+        'other' => formula_source('other', tag: 'v1.0.0', install: STAGING, resources: {'switches.rb' => '0.9.15'}),
+      },
+      repositories: {
+        'thing' => {files: ['lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], requires: ['switches.rb']},
+        'other' => {files: ['lib/Other.rb'], changelog: '1.0.0', tags: ['v1.0.0'], requires: ['something-else']},
+      },
+    ) do |output, _status|
+      _(output).wont_include 'the same gem at more than one version'
+      _(output).must_include '0 gems are pinned at more than one version'
+    end
+  end
+
+  # A require does not spell its gem, so the one which is reached directly has to
+  # be recognised through the path it is required by.
+  it 'reads a require which does not spell its gem' do
+    in_fixture(
+      formulae: {
+        'thing' => formula_source('thing', tag: 'v1.0.0', install: STAGING, resources: {'activesupport' => '8.1.3.1'}),
+        'other' => formula_source('other', tag: 'v1.0.0', install: STAGING, resources: {'activesupport' => '7.0.7.2'}),
+      },
+      repositories: {
+        'thing' => {files: ['lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'], requires: ['active_support/core_ext/string']},
+        'other' => {files: ['lib/Other.rb'], changelog: '1.0.0', tags: ['v1.0.0'], requires: ['active_support']},
+      },
+    ) do |output, _status|
+      _(output).must_include 'activesupport: 7.0.7.2 in other; 8.1.3.1 in thing'
     end
   end
 

@@ -88,7 +88,7 @@ And two reported apart from the formulae, being faults of the tap rather than of
 
 | check | what it catches |
 | --- | --- |
-| `resource_findings` | the same gem pinned at more than one version across the tap |
+| `resource_findings` | the same gem pinned at more than one version, by two formulae which each require it directly |
 | `readme_findings` | the tap's own README naming a formula it no longer holds, or failing to name one it does |
 
 
