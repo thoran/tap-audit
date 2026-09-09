@@ -2,12 +2,12 @@
 
 Date: 20260823
 
-Jobs are in TODO.txt. What is here is undecided: questions to be answered rather
+Jobs are in TODO. What is here is undecided: questions to be answered rather
 than work to be done, which is why they are prose and the jobs are a list.
 
 ## Open questions
 
-### Whether this is a tap auditor or a repository auditor which a tap auditor calls
+### Whether this is one tool or a caller of several
 
 The name says tap and the balance says otherwise. Of the fourteen per-formula
 checks, one reads the formula alone, four read the repository alone, and nine
@@ -21,19 +21,48 @@ declared a licence with no LICENSE file and sat that way unreported, while the
 tap's twenty were swept, because they have no formula and so are not in the
 index.
 
-**If it splits, the seam is intrinsic against relational**, and not repository
-against tap, which is the obvious cut and the wrong one. A repository auditor
-asks whether a repository is self-consistent: CHANGELOG against commits,
-`VERSION.rb` against the script header, tags against the branch, the standard
-files present. None of that needs a formula. What remains here is the relational
-question — whether the formula agrees with what the repository says: the pin, the
-version, the install lines against the tracked directories, the interpreter
-against `depends_on`, and what origin serves.
+**The seam is intrinsic against relational**, and not repository against tap,
+which is the obvious cut and the wrong one. Asking whether a repository is
+self-consistent — CHANGELOG against commits, `VERSION.rb` against the script
+header, tags against the branch, the standard files present — needs no formula.
+What is relational is whether the formula agrees with what the repository says:
+the pin, the version, the install lines against the tracked directories, the
+interpreter against `depends_on`, and what origin serves.
 
-The name stays as it is for now. What is undecided is whether the split happens
-at all, and the cost is the spec rather than the tool: most of the eighty-nine
-examples build a formula and a tap directory in order to exercise something which
-only reads a repository.
+This was first written as a binary, one tool splitting into two, and that no
+longer matches what is here. There are at least four pieces, and `tap-audit` is
+better understood as the thing which calls them over the tap's list than as the
+thing which contains them:
+
+- **Repository consistency**, the intrinsic checks above. The largest piece and
+  the one with the clearest boundary. TODO 3 moves `secondary_version_findings`
+  here, and TODO 9 — a version with no CHANGELOG entry — was written straight
+  into this shape, never touching a formula at all.
+- **Requires resolution**, whether a script's requires resolve from what is
+  installed and which vendored files nothing reaches. TODO 1 and 2, both already
+  waiting on `audit_requires` and `vendor_requires` becoming one tool, so the
+  calling-out is settled in principle here and merely unbuilt.
+- **Publication**, whether the local repository, the remote and rubygems agree.
+  The argument against its being part of this is that `tap-audit` never speaks to
+  a remote, and that adding lookups would make it slow and fallible exactly when
+  it is most wanted. A sibling by that reasoning rather than a part.
+- **The tap proper**, the relational checks, which is what would be left.
+
+Two things follow. The index stops being the tap: a repository auditor wants a
+list of repositories, and the tap is one source of that list rather than the
+definition of it, which is what left the fifteen unreported. And the exit status
+has to compose, each piece answering for itself while the caller answers for the
+run.
+
+The index is wanted elsewhere too, and the answer reached there was a walk for
+`.git` directories beneath a root — which is this question with the tap removed
+from it. That the same list is being derived twice by different means is an
+argument for settling it rather than leaving it.
+
+The name stays as it is for now, and none of this is a decision yet. The cost is
+still the spec rather than the tool: most of the eighty-nine examples build a
+formula and a tap directory in order to exercise something which only reads a
+repository, and that is as true of a four-way split as of a two-way one.
 
 ### Whether pinning is policy
 
