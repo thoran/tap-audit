@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 20260909
+
+0.14.2: ~ test/tap-audit_test.rb: the fixtures read the machine's git configuration and were failing upon it.
+
+1. ~ test/tap-audit_test.rb: + GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM set to File::NULL, so the fixtures are built by a git which reads no configuration at all. The file opens by saying the tap under test is built rather than borrowed, and git was borrowing the machine underneath it.
+2. tag.gpgSign is true here, which makes the bare `git tag v1.0.0` the fixtures use fail outright with "no tag message?". No fixture carried a tag, so every check which reads one failed: 23 of the 91 examples, among them the orphan, untagged, tag, pinned version, shadow, interpreter and origin checks.
+3. The origin check is why this matters rather than merely being untidy. Its four examples are what say remote_findings works, that being the guard written before the pin sweep for the one fault pinning introduces which no reading of a clone can see, and all four were failing while the sweep was being called ready to run.
+4. Red at every commit tested back to 0.14.1. How much further back it goes depends upon when tag.gpgSign was set, which nothing records.
+5. The suite now passes under a global configuration setting tag.gpgSign, commit.gpgSign and init.defaultBranch, none of which it survived before. Identity was already passed per commit, which is why commits went on working where tags did not.
+6. ~ test/tap-audit_test.rb: /0.8.0/0.8.1/, and the date.
+7. ~ bin/tap-audit: /0.14.1/0.14.2/, and the date. Nothing the tool does changes here.
+
+
 ## 20260824
 
 0.14.1: + gem 'switches.rb', which the check added at 0.14.0 would want of any formula.

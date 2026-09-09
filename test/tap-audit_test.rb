@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
-# 20260823
-# 0.8.0
+# 20260909
+# 0.8.1
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -15,6 +15,19 @@ require 'minitest/autorun'
 require 'fileutils'
 require 'open3'
 require 'tmpdir'
+
+# The fixtures are built with git, which reads the machine's configuration before
+# anything here has a say, and borrowing it undoes the paragraph above.
+# tag.gpgSign is true on the machine this runs on, which makes a bare
+# `git tag v1.0.0` fail with "no tag message?", so no fixture carried a tag and
+# every check which reads one failed — 23 of the 91 examples, the whole of the
+# origin check among them, found on 20260909 and red at every commit tested back
+# to 0.14.1.  How much further back it goes depends upon when tag.gpgSign was
+# set, which nothing records.  Both configuration files are therefore pointed at
+# nothing, for this process and for the subprocess it runs.  Identity is passed
+# per commit already, which is why that much survived.
+ENV['GIT_CONFIG_GLOBAL'] = File::NULL
+ENV['GIT_CONFIG_SYSTEM'] = File::NULL
 
 BIN = ENV['TAP_AUDIT'] || File.expand_path('../bin/tap-audit', __dir__)
 
