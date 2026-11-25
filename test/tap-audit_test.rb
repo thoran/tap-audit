@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
 # 20261125
-# 0.9.1
+# 0.9.2
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -939,6 +939,7 @@ describe 'the unrecognised statement check' do
       "system 'gem', 'install', '--no-document', '--install-dir', libexec/'vendor',\n  *resources.map{|r| r.fetch.to_s}",
       "resources.each do |r|\n  r.fetch\nend",
       "(bin/'thing').write_env_script(\n  libexec/'bin/thing',\n  RUBYLIB: libexec/'lib',\n)",
+      "chmod 0755, libexec/'bin/thing'",
     ]
     in_fixture(**agreeing(install: recognised.join("\n"))) do |output, _status|
       _(output).wont_include 'unrecognised'

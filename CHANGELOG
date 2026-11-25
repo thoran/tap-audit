@@ -2,6 +2,14 @@
 
 ## 20261125
 
+0.15.2: Recognise chmod in def install.
+
+1. ~ bin/tap-audit: ~ INSTALL_IDIOMS: + chmod. It changes the mode of what is in the keg and puts nothing there, and yacy's was reported as a statement whose effect upon the keg was unknown.
+2. ~ bin/tap-audit: /0.15.1/0.15.2/
+3. ~ test/tap-audit_test.rb: The idioms the tap uses include chmod.
+4. ~ test/tap-audit_test.rb: /0.9.1/0.9.2/
+
+
 0.15.1: Read the tap's install lines with or without the prompt.
 
 1. ~ bin/tap-audit: ~ installed_names(): The leading `$ ` is optional. The tap's README dropped it, and every formula was reported as one its install list does not name.

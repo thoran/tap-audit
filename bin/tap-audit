@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20261125
-# 0.15.1
+# 0.15.2
 
 gem 'switches.rb'
 
@@ -188,9 +188,12 @@ def logical_lines(lines)
   statements
 end
 
+# chmod puts nothing into the keg, changing only the mode of what is there: yacy
+# makes its script executable whatever mode it was committed with.
 INSTALL_IDIOMS = [
   /\.install\b/,
   /\bFileUtils\.\w+/,
+  /\Achmod\b/,
   /\Asystem\b/,
   /\AENV\[/,
   /\Aresources\b/,
