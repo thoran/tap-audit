@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
 # 20261125
-# 0.9.0
+# 0.9.1
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -148,8 +148,8 @@ end
 # The tap's own README states its formulae twice, as a line to run and as a link
 # to the source, and the check reads both.  Written to agree unless an example
 # gives it something else to say.
-def write_tap_readme(tap, names, installed: nil, sourced: nil)
-  installs = (installed || names).collect{|name| "$ brew install #{name}"}.join("\n")
+def write_tap_readme(tap, names, installed: nil, sourced: nil, prompt: '$ ')
+  installs = (installed || names).collect{|name| "#{prompt}brew install #{name}"}.join("\n")
   sources = (sourced || names).collect{|name| "[#{name}](https://github.com/thoran/#{name})"}.join(",\n")
   File.write(File.join(tap, 'README.md'), "# homebrew-tap\n\n## Usage\n\n```shell\n#{installs}\n```\n\n## Sources\n\n#{sources}\n")
 end
@@ -255,10 +255,13 @@ describe 'the summary check' do
 
   # moby's case: the commits are of 2024 and the entries were reconstructed in
   # 2026, so the record disagreeing with the log was written two years after it.
+  # Dated at noon, since a date alone takes the time of day it is run at, and
+  # run in the hour after midnight in summer, that hour falls on the day before
+  # in June's offset.
   it 'orders them oldest first where the CHANGELOG was written later' do
     in_fixture(
       formulae: {'thing' => formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'")},
-      repositories: {'thing' => {files: ['bin/thing'], tags: ['v1.0.0'], commit_summary: '1.0.0: something else entirely.', dated: '2024-06-05', changelog_later: '1.0.0'}},
+      repositories: {'thing' => {files: ['bin/thing'], tags: ['v1.0.0'], commit_summary: '1.0.0: something else entirely.', dated: '2024-06-05 12:00', changelog_later: '1.0.0'}},
     ) do |output, _status|
       _(output).must_include 'summary: 1.0.0 disagrees, oldest first'
       _(output).must_include %{2024-06-05  commit     "1.0.0: something else entirely."}
@@ -641,6 +644,15 @@ describe "the tap's own README" do
   it 'reports a name listed which is no formula, a formula renamed leaving the old name behind' do
     in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'"), tap_readme: {installed: ['thing', 'gone']}) do |output, _status|
       _(output).must_include 'the install list names gone, which is no formula here'
+    end
+  end
+
+  # The tap's README dropped the prompt on 20261125, and every formula was then
+  # reported as one the install list does not name.
+  it 'reads an install line written without the prompt' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'"), tap_readme: {prompt: ''}) do |output, status|
+      _(output).wont_include "the tap's own README"
+      _(status).must_equal 0
     end
   end
 

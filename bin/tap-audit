@@ -2,7 +2,7 @@
 # tap-audit
 
 # 20261125
-# 0.15.0
+# 0.15.1
 
 gem 'switches.rb'
 
@@ -774,8 +774,10 @@ def tap_readme
   )
 end
 
+# With the shell's prompt or without it, the tap's README having been written
+# both ways.  Read only with it, a README dropping the prompt names nothing.
 def installed_names
-  tap_readme.to_s.scan(/^\$ brew install (?:thoran\/tap\/)?([a-z0-9_.-]+)$/).flatten
+  tap_readme.to_s.scan(/^(?:\$ )?brew install (?:thoran\/tap\/)?([a-z0-9_.-]+)$/).flatten
 end
 
 def sourced_names

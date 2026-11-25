@@ -2,6 +2,16 @@
 
 ## 20261125
 
+0.15.1: Read the tap's install lines with or without the prompt.
+
+1. ~ bin/tap-audit: ~ installed_names(): The leading `$ ` is optional. The tap's README dropped it, and every formula was reported as one its install list does not name.
+2. ~ bin/tap-audit: /0.15.0/0.15.1/
+3. ~ test/tap-audit_test.rb: ~ write_tap_readme(): + prompt:.
+4. ~ test/tap-audit_test.rb: Install lines without the prompt are tested, run to 104.
+5. ~ test/tap-audit_test.rb: The summary check's commit dated 2024-06-05 is dated at noon. A date alone takes the time of day it is run at, which in the hour after midnight in summer falls on the 4th in June's offset.
+6. ~ test/tap-audit_test.rb: /0.9.0/0.9.1/
+
+
 0.15.0: Report when a formula has been deleted from the tap without notice.
 
 1. ~ bin/tap-audit: + tap_git(), + tap_history?(), + tap_root(), + FORMULA_PATHSPEC, + deletions(), + added_with(), + read_declarations(), + tap_declarations(), + declared(), + unreadable_declaration_findings(), + undeclared?(), + deletion_finding(), + undeclared_deletion_findings(), + unresolved_rename_findings(), + deleted_formula_findings(), + report_deletions().
