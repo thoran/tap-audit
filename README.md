@@ -84,19 +84,22 @@ Per formula:
 | `unqualified_dependency_findings` | a dependency named without qualification |
 | `shadow_finding` | something earlier on the search path answering to the name |
 
-And two reported apart from the formulae, being faults of the tap rather than of any one formula in it:
+And three reported apart from the formulae, being faults of the tap rather than of any one formula in it:
 
 | check | what it catches |
 | --- | --- |
 | `resource_findings` | the same gem pinned at more than one version, by two formulae which each require it directly |
 | `readme_findings` | the tap's own README naming a formula it no longer holds, or failing to name one it does |
+| `deleted_formula_findings` | a formula deleted from the tap with no `formula_renames.json` or `tap_migrations.json` entry saying where it went, or a rename naming no formula the tap holds |
 
 
-## The three which are not obvious
+## The four which are not obvious
 
 **`shadow_finding`** is the consumer half. A formula can be correct in every other respect and still never be what runs: a gem shim in `~/.gem` or a copy in `~/bin` sits earlier on the path and answers to the name instead. It searches only the directories ahead of Homebrew's own `bin`, on the reasoning that a formula installs there and nowhere earlier, so anything of the same name found before it is what the name actually runs.
 
 **`orphan_findings`** does not stop at reachability. A tag naming a commit off the branch still resolves — the tag is itself a ref, so the commit survives garbage collection — and a fetch of it never fails. What decides whether it matters is the tree: identical, and the tag is bookkeeping left by an amended message; different, and the repository and the tag disagree about what that version was, so a pin there installs the version a rewrite abandoned, permanently, a pin not drifting.
+
+**`deleted_formula_findings`** reads the tap's history, a deletion being visible nowhere else. Homebrew knows an installed keg by its formula's name and moves it to a new one only where `formula_renames.json` declares the rename, or `tap_migrations.json` the move to another tap. A formula deleted with neither strands every install of it: `brew upgrade` and `brew outdated` pass over it, installing the new name puts it beside the old, and `brew doctor` reports the keg as deleted long after the commit which did it. A formula counts as deleted where a commit leading to the head removed it, so a rename is reported on the branch which makes it, naming that commit and whatever formula it added. The whole history is read every run, as `orphan_findings` reads every tag: a rename left undeclared years ago strands its installs as surely as one made today. A formula retired with nothing to replace it is reported likewise, there being nowhere to declare one, and formulae with no git history beneath them are said to have none rather than passed as having deleted nothing.
 
 **`remote_findings`** asks origin, because a pinned `url` is fetched from origin and nowhere else. Every other check here reads a clone, which can be in perfect order while origin serves something else — the state fifty-eight tags across eight repositories were in on 20260822, none of them visible from a clone.
 

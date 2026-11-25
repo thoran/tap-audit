@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 # tap-audit
 
-# 20260909
-# 0.14.2
+# 20261125
+# 0.15.0
 
 gem 'switches.rb'
 
@@ -799,6 +799,116 @@ def readme_findings
   end
 end
 
+def tap_git(*arguments)
+  IO.popen(['git', '-C', formulae_directory, *arguments], err: File::NULL, &:read)
+end
+
+def tap_history?
+  !tap_git('rev-parse', '--verify', '--quiet', 'HEAD').strip.empty?
+end
+
+def tap_root
+  @tap_root ||= tap_git('rev-parse', '--show-toplevel').strip
+end
+
+# The formula files at the top of the formulae directory, which is where
+# formula_paths reads them from, and not those of bin/ or of anything beneath.
+FORMULA_PATHSPEC = ':(glob)*.rb'
+
+# Every formula a commit upon the branch deleted, against the newest commit to
+# delete it.  --no-renames because git's rename detection would otherwise show
+# install_yacy.rb becoming yacy.rb as a rename, and leave out the deletion which
+# is the whole of what is being looked for.
+def deletions
+  @deletions ||= (
+    result = {}
+    commit = nil
+    tap_git('log', '--no-renames', '--diff-filter=D', '--relative', '--name-only', '--date=short', '--format=commit %h %ad', '--', FORMULA_PATHSPEC).lines.collect(&:strip).reject(&:empty?).each do |line|
+      next commit = line.split[1, 2] if line =~ /\Acommit \h+ /
+      result[formula_name(line)] ||= commit
+    end
+    result
+  )
+end
+
+def added_with(commit)
+  tap_git('diff-tree', '--no-commit-id', '--no-renames', '-r', '--diff-filter=A', '--relative', '--name-only', commit, '--', FORMULA_PATHSPEC).lines.collect{|line| formula_name(line.strip)}
+end
+
+# What the tap says Homebrew should do with a name it no longer holds, read
+# from the working directory as the formulae are, so that an entry written and
+# not yet committed already answers for the deletion it declares.
+def read_declarations(file)
+  path = File.join(tap_root, file)
+  declared = File.exist?(path) ? JSON.parse(File.read(path)) : {}
+  declared.is_a?(Hash) ? declared : :unreadable
+rescue JSON::ParserError
+  :unreadable
+end
+
+def tap_declarations(file)
+  @tap_declarations ||= {}
+  @tap_declarations[file] ||= read_declarations(file)
+end
+
+def declared(file)
+  tap_declarations(file) == :unreadable ? {} : tap_declarations(file)
+end
+
+def unreadable_declaration_findings
+  %w{formula_renames.json tap_migrations.json}.select{|file| tap_declarations(file) == :unreadable}.collect do |file|
+    "#{file}: not a JSON object, so nothing it declares can be read"
+  end
+end
+
+def undeclared?(name)
+  !declared('formula_renames.json').key?(name) && !declared('tap_migrations.json').key?(name)
+end
+
+def deletion_finding(name, commit, date)
+  added = added_with(commit)
+  replaced = added.empty? ? '' : ", which added #{added.join(', ')}"
+  "#{name}: deleted in #{commit} on #{date}#{replaced}, and neither formula_renames.json nor tap_migrations.json says where it went"
+end
+
+def undeclared_deletion_findings
+  deletions.select{|name, _commit| !formula_names.include?(name) && undeclared?(name)}.collect do |name, (commit, date)|
+    deletion_finding(name, commit, date)
+  end
+end
+
+# A rename naming what the tap does not hold migrates the keg to nothing, which
+# strands it as surely as no entry at all.
+def unresolved_rename_findings
+  declared('formula_renames.json').reject{|_old_name, new_name| formula_names.include?(new_name)}.collect do |old_name, new_name|
+    "#{old_name}: formula_renames.json renames it to #{new_name}, which is no formula here"
+  end
+end
+
+# Homebrew knows an installed keg by its formula's name, and moves it to another
+# only where the tap declares the rename in formula_renames.json or the move to
+# another tap in tap_migrations.json.  A formula deleted with neither strands
+# every install of it: upgrade and outdated pass over it, installing the new name
+# puts it beside the old rather than in its place, and brew doctor reports the
+# keg as deleted long after the commit which did it.  brew audit reads one
+# formula at a time and never one version of the tap against another, so the
+# history is the only place this can be seen.
+#
+# The whole of the history, and every run, as orphan_findings is: a deletion
+# undeclared in 2024 strands its installs as much as one made today, and whale.rb
+# became moby.rb that year with nothing declared.
+def deleted_formula_findings
+  @deleted_formula_findings ||= (
+    if tap_history?
+      [*unreadable_declaration_findings, *undeclared_deletion_findings, *unresolved_rename_findings]
+    elsif formula_paths.empty?
+      []
+    else
+      ['the formulae directory has no git history, so what the tap has deleted cannot be read']
+    end
+  )
+end
+
 def formula_only_findings(path)
   [*unrecognised_findings(path), unstaged_resource_finding(path), *unqualified_dependency_findings(path), homepage_finding(path)].compact
 end
@@ -843,15 +953,23 @@ def report_readme
   readme_findings.each{|finding| puts "  #{finding}"}
 end
 
+def report_deletions
+  return if deleted_formula_findings.empty?
+  puts
+  puts 'formulae deleted from the tap'
+  deleted_formula_findings.each{|finding| puts "  #{finding}"}
+end
+
 def report_summary
-  puts unless findings.empty? && resource_findings.empty? && readme_findings.empty?
+  puts if anything_found?
   puts "#{findings.length} of #{formula_paths.length} formulae have something to answer for, " \
     "#{resource_findings.length} #{resource_findings.length == 1 ? 'gem is' : 'gems are'} pinned at more than one version, " \
-    "and the tap's README has #{readme_findings.length} #{readme_findings.length == 1 ? 'thing' : 'things'} to answer for."
+    "the tap's README has #{readme_findings.length} #{readme_findings.length == 1 ? 'thing' : 'things'} to answer for, " \
+    "and the tap's deletions have #{deleted_formula_findings.length} #{deleted_formula_findings.length == 1 ? 'thing' : 'things'} to answer for."
 end
 
 def anything_found?
-  !findings.empty? || !resource_findings.empty? || !readme_findings.empty?
+  !findings.empty? || !resource_findings.empty? || !readme_findings.empty? || !deleted_formula_findings.empty?
 end
 
 def main
@@ -860,6 +978,7 @@ def main
   report
   report_resources
   report_readme
+  report_deletions
   report_summary
   exit 1 if anything_found?
 end

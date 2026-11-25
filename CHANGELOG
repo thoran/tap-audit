@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 20261125
+
+0.15.0: Report when a formula has been deleted from the tap without notice.
+
+1. ~ bin/tap-audit: + tap_git(), + tap_history?(), + tap_root(), + FORMULA_PATHSPEC, + deletions(), + added_with(), + read_declarations(), + tap_declarations(), + declared(), + unreadable_declaration_findings(), + undeclared?(), + deletion_finding(), + undeclared_deletion_findings(), + unresolved_rename_findings(), + deleted_formula_findings(), + report_deletions().
+2. ~ bin/tap-audit: ~ report_summary(), ~ anything_found?(), ~ main(): The deletions are reported, counted and exited upon as the README's findings are.
+3. ~ bin/tap-audit: /0.14.2/0.15.0/, and the date.
+4. ~ test/tap-audit_test.rb: + require 'json', + commit_tap(). The tap under test is committed, a tap with no history being now a finding of its own.
+5. ~ test/tap-audit_test.rb: + describe 'a formula deleted from the tap', twelve examples, run to 103.
+6. ~ test/tap-audit_test.rb: /0.8.1/0.9.0/, and the date.
+7. ~ README.md: The check is described.
+8. ~ TODO: ~ 5: A formula retired with nothing to replace it is reported every run until there is a way to say so.
+
+
 ## 20260909
 
 0.14.2: ~ test/tap-audit_test.rb: the fixtures read the machine's git configuration and were failing upon it.

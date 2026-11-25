@@ -1,7 +1,7 @@
 # tap-audit_test.rb
 
-# 20260909
-# 0.8.1
+# 20261125
+# 0.9.0
 
 # The tap under test is built rather than borrowed.  tap-audit reads two
 # directories — the formulae and the repositories beside them — and both are
@@ -13,6 +13,7 @@
 
 require 'minitest/autorun'
 require 'fileutils'
+require 'json'
 require 'open3'
 require 'tmpdir'
 
@@ -153,6 +154,15 @@ def write_tap_readme(tap, names, installed: nil, sourced: nil)
   File.write(File.join(tap, 'README.md'), "# homebrew-tap\n\n## Usage\n\n```shell\n#{installs}\n```\n\n## Sources\n\n#{sources}\n")
 end
 
+# A tap is a repository, and what it has deleted is read from its history, so
+# the tap under test is committed as well as written.  Left uncommitted, every
+# example would be about a tap with no history.
+def commit_tap(tap, message = 'in')
+  git(tap, 'init', '--quiet')
+  git(tap, 'add', '.')
+  git(tap, '-c', 'user.email=s@e', '-c', 'user.name=s', 'commit', '--quiet', '--allow-empty', '-m', message)
+end
+
 def in_fixture(formulae: {}, repositories: {}, arguments: [], tap_readme: nil)
   Dir.mktmpdir do |root|
     tap = File.join(root, 'tap')
@@ -160,6 +170,7 @@ def in_fixture(formulae: {}, repositories: {}, arguments: [], tap_readme: nil)
     FileUtils.mkdir_p([tap, repositories_directory])
     formulae.each{|name, source| File.write(File.join(tap, "#{name}.rb"), source)}
     tap_readme ? write_tap_readme(tap, formulae.keys, **tap_readme) : write_tap_readme(tap, formulae.keys)
+    commit_tap(tap)
     repositories.each{|name, options| make_repository(repositories_directory, name, **options)}
     stdout, stderr, status = Open3.capture3(BIN, '--formulae', tap, '--repositories', repositories_directory, '--search-path', '', *arguments)
     yield stdout + stderr, status.exitstatus
@@ -642,6 +653,131 @@ describe "the tap's own README" do
   end
 end
 
+# Homebrew moves an installed keg to a new name only where the tap declares it,
+# so a formula deleted with nothing declared strands every install of it.
+# install_yacy.rb became yacy.rb on 20261125 with neither file.
+describe 'a formula deleted from the tap' do
+  # The tap's history stated a commit at a time, each writing the formulae it
+  # adds, removing those it deletes, and moving those it renames whole, which git
+  # would show as a rename were it not told otherwise.  declarations: are written after the last
+  # commit and left uncommitted, as an entry is while it is being made.  within:
+  # puts the formulae in a directory of the tap rather than at its top, as
+  # Formula/ is, the declarations staying at the top where Homebrew reads them.
+  def with_tap(history, declarations: {}, within: nil, branch: nil)
+    Dir.mktmpdir do |root|
+      top = File.join(root, 'tap')
+      tap = within ? File.join(top, within) : top
+      repositories = File.join(root, 'repositories')
+      FileUtils.mkdir_p([tap, repositories])
+      git(top, 'init', '--quiet')
+      history.each_with_index do |step, index|
+        git(top, 'checkout', '--quiet', '-b', branch) if branch && index == history.length - 1
+        Array(step[:delete]).each{|name| File.delete(File.join(tap, "#{name}.rb"))}
+        step.fetch(:rename, {}).each{|old_name, new_name| File.rename(File.join(tap, "#{old_name}.rb"), File.join(tap, "#{new_name}.rb"))}
+        Array(step[:add]).each{|name| FileUtils.mkdir_p(File.dirname(File.join(tap, "#{name}.rb"))); File.write(File.join(tap, "#{name}.rb"), formula_source(name))}
+        commit_tap(top, step[:message] || 'a change')
+      end
+      declarations.each{|file, entries| File.write(File.join(top, file), entries.is_a?(String) ? entries : JSON.generate(entries))}
+      yield(*audit('--formulae', tap, '--repositories', repositories, '--search-path', ''))
+    end
+  end
+
+  RENAMED = [{add: ['install_yacy']}, {rename: {'install_yacy' => 'yacy'}, message: 'install_yacy-0.7.0 --> yacy-0.8.0'}]
+
+  it 'says nothing where the tap has deleted nothing' do
+    in_fixture(**agreeing(install: "libexec.install 'bin', 'lib'")) do |output, status|
+      _(output).wont_include 'formulae deleted from the tap'
+      _(output).must_include "the tap's deletions have 0 things to answer for"
+      _(status).must_equal 0
+    end
+  end
+
+  it 'reports a rename declared nowhere, naming the commit and what it added' do
+    with_tap(RENAMED) do |output, status|
+      _(output).must_include 'formulae deleted from the tap'
+      _(output).must_match(/install_yacy: deleted in \h+ on \d{4}-\d{2}-\d{2}, which added yacy, and neither formula_renames\.json nor tap_migrations\.json says where it went/)
+      _(output).must_include "the tap's deletions have 1 thing to answer for"
+      _(status).must_equal 1
+    end
+  end
+
+  it 'names no replacement where the commit added none' do
+    with_tap([{add: ['thing', 'gone']}, {delete: ['gone']}]) do |output, _status|
+      _(output).must_match(/gone: deleted in \h+ on \d{4}-\d{2}-\d{2}, and neither/)
+    end
+  end
+
+  # The rename is caught on the branch which makes it, and not only once it has
+  # reached master, the history read being the one which leads to what is here.
+  it 'reports a rename made upon a branch not yet merged' do
+    with_tap(RENAMED, branch: 'yacy') do |output, _status|
+      _(output).must_include 'install_yacy: deleted in'
+    end
+  end
+
+  it 'says nothing where formula_renames.json declares the rename, even before it is committed' do
+    with_tap(RENAMED, declarations: {'formula_renames.json' => {'install_yacy' => 'yacy'}}) do |output, status|
+      _(output).wont_include 'formulae deleted from the tap'
+      _(status).must_equal 1
+    end
+  end
+
+  it 'says nothing where tap_migrations.json declares the move to another tap' do
+    with_tap([{add: ['thing', 'gone']}, {delete: ['gone']}], declarations: {'tap_migrations.json' => {'gone' => 'homebrew/core'}}) do |output, _status|
+      _(output).wont_include 'formulae deleted from the tap'
+    end
+  end
+
+  # A declared rename to a name the tap does not hold migrates the keg to
+  # nothing.
+  it 'reports a rename naming what is no formula here' do
+    with_tap(RENAMED, declarations: {'formula_renames.json' => {'install_yacy' => 'yacyy'}}) do |output, _status|
+      _(output).must_include 'install_yacy: formula_renames.json renames it to yacyy, which is no formula here'
+      _(output).wont_include 'install_yacy: deleted in'
+    end
+  end
+
+  it 'reports a declarations file which cannot be read, rather than taking it as declaring nothing' do
+    with_tap(RENAMED, declarations: {'formula_renames.json' => '{"install_yacy": '}) do |output, _status|
+      _(output).must_include 'formula_renames.json: not a JSON object, so nothing it declares can be read'
+      _(output).must_include 'install_yacy: deleted in'
+    end
+  end
+
+  it 'says nothing of a formula deleted and since put back' do
+    with_tap([{add: ['thing']}, {delete: ['thing']}, {add: ['thing']}]) do |output, _status|
+      _(output).wont_include 'formulae deleted from the tap'
+    end
+  end
+
+  it 'reads only the formulae, and not a .rb deleted from beneath them' do
+    with_tap([{add: ['thing', 'bin/helper']}, {delete: ['bin/helper']}]) do |output, _status|
+      _(output).wont_include 'formulae deleted from the tap'
+    end
+  end
+
+  it 'reads formulae kept in a directory of the tap, and declarations at its top' do
+    with_tap(RENAMED, within: 'Formula') do |output, _status|
+      _(output).must_include 'install_yacy: deleted in'
+    end
+    with_tap(RENAMED, within: 'Formula', declarations: {'formula_renames.json' => {'install_yacy' => 'yacy'}}) do |output, _status|
+      _(output).wont_include 'formulae deleted from the tap'
+    end
+  end
+
+  # A tap is a repository, so formulae with no history beneath them are
+  # formulae whose deletions cannot be read, and a pass there would be one upon
+  # having found nothing rather than upon there being nothing to find.
+  it 'says so where the formulae have no history to read' do
+    Dir.mktmpdir do |root|
+      File.write(File.join(root, 'thing.rb'), formula_source('thing'))
+      output, status = audit('--formulae', root, '--repositories', root, '--search-path', '')
+      _(output).must_include 'the formulae directory has no git history, so what the tap has deleted cannot be read'
+      _(status).must_equal 1
+    end
+  end
+end
+
 # A pinned url is fetched from origin, so origin is the only place the question
 # can be asked.  Everything else here reads the clone, which can be in perfect
 # order while origin serves something else — the state fifty-eight tags across
@@ -657,6 +793,7 @@ describe 'the origin check' do
       FileUtils.mkdir_p([tap, repositories])
       File.write(File.join(tap, 'thing.rb'), formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'"))
       write_tap_readme(tap, ['thing'])
+      commit_tap(tap)
       make_repository(repositories, 'thing', files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'])
       directory = File.join(repositories, 'thing')
       origin = File.join(root, 'origin.git')
@@ -1104,6 +1241,7 @@ describe 'a copy which shadows the formula' do
       behind.each{|n| FileUtils.touch(File.join(brew_bin, n))}
       File.write(File.join(tap, 'thing.rb'), formula_source('thing', tag: 'v1.0.0', install: "libexec.install 'bin', 'lib'"))
       write_tap_readme(tap, ['thing'])
+      commit_tap(tap)
       make_repository(repositories, 'thing', files: ['bin/thing', 'lib/Thing.rb'], changelog: '1.0.0', tags: ['v1.0.0'])
       search = brew_on_path ? [early, brew_bin, late] : [early, late]
       yield(*audit('--formulae', tap, '--repositories', repositories,
